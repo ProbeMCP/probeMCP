@@ -41,6 +41,7 @@ dev = [
   "mypy>=1.10.0",
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.0",
+  "pytest-cov>=5.0.0",
   "ruff>=0.5.0",
 ]
 
@@ -74,3 +75,20 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = [
+  "--cov=probemcp",
+  "--cov-report=term-missing",
+  "--cov-fail-under=85",
+]
+markers = [
+  "integration_qemu: tests that require a local QEMU target",
+  "hardware: tests that require physical debug hardware",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["probemcp"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

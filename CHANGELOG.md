@@ -12,3 +12,6 @@ This project follows semantic versioning after the first public release.
 - Added a Python package skeleton and development tooling baseline.
 - Added core MCP schema models, safety policy, debug state machine, audit JSONL
   writer, and initial GDB/MI parser foundations.
+- Added coverage enforcement, MI command serialization, async MI controller,
+  generic remote backend, session manager, debug session orchestration,
+  FastMCP metadata app, snapshot capture, and Cortex-M fault analysis.

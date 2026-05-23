@@ -1,4 +1,4 @@
-.PHONY: build check format lint test typecheck
+.PHONY: build check coverage format lint test typecheck
 
 check: lint typecheck test
 
@@ -13,6 +13,9 @@ typecheck:
 
 test:
 	uv run pytest
+
+coverage:
+	uv run pytest --cov=probemcp --cov-report=term-missing
 
 build:
 	uv build

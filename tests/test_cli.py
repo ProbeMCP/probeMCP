@@ -1,0 +1,10 @@
+from typer.testing import CliRunner
+
+from probemcp.cli import app
+
+
+def test_cli_prints_version() -> None:
+    result = CliRunner().invoke(app)
+
+    assert result.exit_code == 0
+    assert result.stdout.strip()

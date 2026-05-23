@@ -21,8 +21,12 @@ Or use Make:
 
 ```bash
 make check
+make coverage
 make build
 ```
+
+`pytest` enforces coverage through `pyproject.toml`. The default threshold is
+85% for the Python package, with QEMU and hardware tests kept opt-in.
 
 ## Quality Bar
 
@@ -46,3 +50,12 @@ The test suite should grow in layers:
 5. optional hardware-backed adapter conformance tests.
 
 Hardware-backed tests should be opt-in and skipped by default in CI.
+
+## Optional Integration Tests
+
+Future integration tests should use explicit markers and environment flags:
+
+```bash
+PROBEMCP_RUN_QEMU=1 uv run pytest -m integration_qemu
+PROBEMCP_RUN_HARDWARE=1 uv run pytest -m hardware
+```
