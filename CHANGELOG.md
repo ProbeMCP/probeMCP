@@ -18,3 +18,5 @@ This project follows semantic versioning after the first public release.
 - Updated CI to run on every pushed commit and added a policy/audit-backed
   tool execution service for primitive target operations, snapshots, and fault
   analysis.
+- Wired FastMCP tool registrations to the tool execution service for primitive
+  target operations, snapshot capture, and fault analysis.
