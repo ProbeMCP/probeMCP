@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from pydantic import Field
 
 from probemcp.mcp_server.schemas import (
     DebugError,
-    JsonValue,
     PermissionLevel,
     SchemaModel,
     TargetState,
@@ -36,8 +36,8 @@ class AuditEvent(SchemaModel):
     target_state_before: TargetState = TargetState.UNKNOWN
     target_state_after: TargetState = TargetState.UNKNOWN
     outcome: AuditOutcome
-    request_summary: dict[str, JsonValue] = Field(default_factory=dict)
-    result_summary: dict[str, JsonValue] = Field(default_factory=dict)
+    request_summary: dict[str, Any] = Field(default_factory=dict)
+    result_summary: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     error: DebugError | None = None
 

@@ -66,6 +66,7 @@ READ_ONLY_OPERATIONS = frozenset(
         DebugOperation.READ_MEMORY,
         DebugOperation.ANALYZE_FAULT,
         DebugOperation.COMPARE_SNAPSHOTS,
+        DebugOperation.DEBUG_SNAPSHOT,
         DebugOperation.EXPLAIN_CURRENT_STATE,
         DebugOperation.SUGGEST_NEXT_DEBUG_STEPS,
     }
@@ -81,7 +82,6 @@ TARGET_CHANGING_OPERATIONS = frozenset(
         DebugOperation.RESET_TARGET,
         DebugOperation.SET_BREAKPOINT,
         DebugOperation.CLEAR_BREAKPOINT,
-        DebugOperation.DEBUG_SNAPSHOT,
     }
 )
 
@@ -193,6 +193,14 @@ class PolicyEngine:
             )
 
         if request.permission_mode == PermissionLevel.CONFIRM_REQUIRED:
+            if request.confirmation_token:
+                return PolicyDecision(
+                    kind=PolicyDecisionKind.ALLOW,
+                    operation=request.operation,
+                    required_permission=PermissionLevel.CONFIRM_REQUIRED,
+                    reason="Confirmation token accepted for target-changing operation.",
+                )
+
             return PolicyDecision(
                 kind=PolicyDecisionKind.REQUIRE_CONFIRMATION,
                 operation=request.operation,

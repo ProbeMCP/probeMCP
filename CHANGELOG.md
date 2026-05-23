@@ -15,3 +15,6 @@ This project follows semantic versioning after the first public release.
 - Added coverage enforcement, MI command serialization, async MI controller,
   generic remote backend, session manager, debug session orchestration,
   FastMCP metadata app, snapshot capture, and Cortex-M fault analysis.
+- Updated CI to run on every pushed commit and added a policy/audit-backed
+  tool execution service for primitive target operations, snapshots, and fault
+  analysis.
