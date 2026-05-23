@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a new ProbeMCP feature.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What debugging workflow or user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the tool, adapter, analyzer, or workflow you want.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - MCP tool contract
+        - GDB/MI controller
+        - Backend adapter
+        - Safety policy
+        - Cortex-M analyzer
+        - SVD/peripheral analysis
+        - RTOS awareness
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety considerations
+      description: What target state changes, permissions, or hardware risks are involved?

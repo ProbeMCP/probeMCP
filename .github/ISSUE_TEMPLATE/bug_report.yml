@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible ProbeMCP problem.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please include enough detail for maintainers to reproduce the issue safely.
+  - type: input
+    id: version
+    attributes:
+      label: ProbeMCP version or commit
+      placeholder: "0.0.0 or commit hash"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - QEMU gdbstub
+        - Generic remote gdbserver
+        - OpenOCD
+        - J-Link GDB Server
+        - pyOCD
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start target ...
+        2. Run ProbeMCP ...
+        3. Call tool ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or audit events
+      render: text
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety context
+      options:
+        - label: This issue does not require destructive target actions to reproduce.
+        - label: This issue involves real hardware.
+        - label: This issue may affect target safety or security.

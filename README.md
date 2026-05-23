@@ -1,5 +1,8 @@
 # ProbeMCP
 
+[![CI](https://github.com/ProbeMCP/probeMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/ProbeMCP/probeMCP/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 ProbeMCP is an open-source, local-first MCP server for safe AI-assisted
 embedded debugging through GDB-compatible debuggers.
 
@@ -137,6 +140,18 @@ The default posture is conservative. Tools that can change target state must
 pass through policy checks and audit logging before execution.
 
 See [docs/safety-model.md](docs/safety-model.md).
+
+## Development
+
+```bash
+uv sync --extra dev
+uv run pytest
+uv run ruff check .
+uv run mypy src
+```
+
+See [docs/development.md](docs/development.md) for the local development
+workflow and quality bar.
 
 ## Technology Direction
 

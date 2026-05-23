@@ -1,0 +1,38 @@
+name: Backend adapter request
+description: Request support for a GDB-compatible debugger backend.
+title: "[Backend]: "
+labels: ["backend", "needs-triage"]
+body:
+  - type: input
+    id: backend
+    attributes:
+      label: Backend name
+      placeholder: "OpenOCD, J-Link GDB Server, pyOCD, vendor GDB server"
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target MCU/SoC or architecture
+      placeholder: "STM32F4, nRF52, ESP32, RISC-V, Cortex-A"
+    validations:
+      required: true
+  - type: textarea
+    id: launch
+    attributes:
+      label: How is the backend normally launched?
+      description: Include command examples if they are safe to share.
+      render: shell
+  - type: textarea
+    id: quirks
+    attributes:
+      label: Known quirks
+      description: Reset, halt, breakpoint, memory-map, or monitor-command behavior.
+  - type: checkboxes
+    id: access
+    attributes:
+      label: Test access
+      options:
+        - label: I can test against this backend.
+        - label: I can provide safe logs or GDB/MI transcripts.
+        - label: I can contribute an adapter implementation.
