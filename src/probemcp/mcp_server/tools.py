@@ -87,6 +87,13 @@ _DEFAULT_TOOLS = (
         "Read target memory bytes.",
     ),
     ToolDefinition(
+        "write_memory",
+        DebugOperation.WRITE_MEMORY,
+        PermissionLevel.FULL_CONTROL,
+        3000,
+        "Write target memory bytes when explicitly enabled.",
+    ),
+    ToolDefinition(
         "set_breakpoint",
         DebugOperation.SET_BREAKPOINT,
         PermissionLevel.CONFIRM_REQUIRED,
@@ -127,6 +134,13 @@ _DEFAULT_TOOLS = (
         PermissionLevel.READONLY,
         5000,
         "Explain current target state from a snapshot.",
+    ),
+    ToolDefinition(
+        "inspect_peripheral",
+        DebugOperation.INSPECT_PERIPHERAL,
+        PermissionLevel.READONLY,
+        5000,
+        "Decode peripheral registers using a local SVD file.",
     ),
     ToolDefinition(
         "suggest_next_debug_steps",

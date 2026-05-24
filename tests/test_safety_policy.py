@@ -63,8 +63,28 @@ def test_memory_write_is_denied_by_default() -> None:
     assert decision.to_error() is not None
     assert decision.to_error().required_permission == PermissionLevel.FULL_CONTROL
 
+def test_memory_write_requires_full_control_enablement_and_confirmation() -> None:
+    needs_confirmation = PolicyEngine().evaluate(
+        PolicyRequest(
+            permission_mode=PermissionLevel.FULL_CONTROL,
+            operation=DebugOperation.WRITE_MEMORY,
+            memory_write_enabled=True,
+        )
+    )
+    allowed = PolicyEngine().evaluate(
+        PolicyRequest(
+            permission_mode=PermissionLevel.FULL_CONTROL,
+            operation=DebugOperation.WRITE_MEMORY,
+            memory_write_enabled=True,
+            confirmation_token="confirmed",
+        )
+    )
 
-def test_production_reset_is_denied_even_with_full_control() -> None:
+    assert needs_confirmation.kind == PolicyDecisionKind.REQUIRE_CONFIRMATION
+    assert allowed.kind == PolicyDecisionKind.ALLOW
+
+
+def test_production_reset_is_blocked_without_local_hardware_interlock() -> None:
     decision = PolicyEngine().evaluate(
         PolicyRequest(
             permission_mode=PermissionLevel.FULL_CONTROL,
@@ -74,4 +94,46 @@ def test_production_reset_is_denied_even_with_full_control() -> None:
     )
 
     assert decision.kind == PolicyDecisionKind.DENY
-    assert "Production reset" in decision.reason
+    assert "hardware_operation_allowlist" in decision.reason
+
+def test_production_reset_requires_confirmation_even_after_interlock_opt_in() -> None:
+    needs_confirmation = PolicyEngine().evaluate(
+        PolicyRequest(
+            permission_mode=PermissionLevel.FULL_CONTROL,
+            operation=DebugOperation.RESET_TARGET,
+            target_class=TargetClass.PRODUCTION_HARDWARE,
+            hardware_operation_allowlist=frozenset({DebugOperation.RESET_TARGET}),
+        )
+    )
+    allowed = PolicyEngine().evaluate(
+        PolicyRequest(
+            permission_mode=PermissionLevel.FULL_CONTROL,
+            operation=DebugOperation.RESET_TARGET,
+            target_class=TargetClass.PRODUCTION_HARDWARE,
+            confirmation_token="confirmed",
+            hardware_operation_allowlist=frozenset({DebugOperation.RESET_TARGET}),
+        )
+    )
+
+    assert needs_confirmation.kind == PolicyDecisionKind.REQUIRE_CONFIRMATION
+    assert allowed.kind == PolicyDecisionKind.ALLOW
+    assert allowed.warnings
+
+def test_lab_hardware_interlock_blocks_emulator_convenience() -> None:
+    lab = PolicyEngine().evaluate(
+        PolicyRequest(
+            permission_mode=PermissionLevel.FULL_CONTROL,
+            operation=DebugOperation.RESUME,
+            target_class=TargetClass.LAB_HARDWARE,
+        )
+    )
+    emulator = PolicyEngine().evaluate(
+        PolicyRequest(
+            permission_mode=PermissionLevel.FULL_CONTROL,
+            operation=DebugOperation.RESUME,
+            target_class=TargetClass.EMULATOR,
+        )
+    )
+
+    assert lab.kind == PolicyDecisionKind.DENY
+    assert emulator.kind == PolicyDecisionKind.ALLOW

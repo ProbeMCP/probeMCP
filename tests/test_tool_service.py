@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,7 @@ from probemcp.mcp_server.schemas import (
     ExplainCurrentStateRequest,
     HaltData,
     HaltRequest,
+    InspectPeripheralRequest,
     PermissionLevel,
     ReadMemoryData,
     ReadMemoryRequest,
@@ -33,10 +35,18 @@ from probemcp.mcp_server.schemas import (
     StepInstructionRequest,
     SuggestNextDebugStepsRequest,
     TargetState,
+    WriteMemoryData,
+    WriteMemoryRequest,
 )
 from probemcp.mcp_server.service import ToolService
 from probemcp.safety.limits import ResourceLimits
-from probemcp.safety.policy import DebugOperation, PolicyDecisionKind, PolicyEngine, PolicyRequest
+from probemcp.safety.policy import (
+    DebugOperation,
+    PolicyDecisionKind,
+    PolicyEngine,
+    PolicyRequest,
+    TargetClass,
+)
 from probemcp.sessions.manager import SessionManager
 
 
@@ -126,6 +136,21 @@ class FakeToolSession:
     ) -> ClearBreakpointData:
         self.calls.append(f"clear_breakpoint:{breakpoint_id}")
         return ClearBreakpointData(breakpoint_id=breakpoint_id, removed=True)
+
+    async def write_memory(
+        self,
+        *,
+        address: str,
+        data_hex: str,
+        expected_old_hex: str | None = None,
+        timeout_ms: int = 3000,
+    ) -> WriteMemoryData:
+        self.calls.append(f"write_memory:{address}:{data_hex}:{expected_old_hex}:{timeout_ms}")
+        return WriteMemoryData(
+            address=address,
+            bytes_written=len(bytes.fromhex(data_hex)),
+            verified_old_value=expected_old_hex is not None,
+        )
 
 
 def make_service(tmp_path: Path, *, permission: PermissionLevel = PermissionLevel.READONLY):
@@ -246,6 +271,30 @@ async def test_tool_service_read_memory_and_breakpoints(tmp_path: Path) -> None:
     assert breakpoint.data.breakpoint_id == "1"
     assert cleared.ok
     assert "clear_breakpoint:1" in session.calls
+
+
+@pytest.mark.asyncio
+async def test_tool_service_write_memory_requires_enablement_and_confirmation(
+    tmp_path: Path,
+) -> None:
+    service, session = make_service(tmp_path, permission=PermissionLevel.FULL_CONTROL)
+    request = WriteMemoryRequest(
+        session_id="session_01",
+        address="0x20000000",
+        data_hex="0102",
+        expected_old_hex="0000",
+    )
+
+    disabled = await service.write_memory(request)
+    service.memory_write_enabled = True
+    written = await confirmed(service, "write_memory", request, session)
+
+    assert disabled.error is not None
+    assert disabled.error.code == "PERMISSION_DENIED"
+    assert written.ok
+    assert written.data is not None
+    assert written.data.bytes_written == 2
+    assert session.calls == ["write_memory:0x20000000:0102:0000:3000"]
 
 
 @pytest.mark.asyncio
@@ -375,10 +424,21 @@ async def test_tool_service_rejects_invalid_confirmation_token(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_tool_service_enforces_resource_limits(tmp_path: Path) -> None:
     service, _session = make_service(tmp_path)
-    service.resource_limits = ResourceLimits(max_sessions=1, max_memory_read_bytes=2)
+    service.resource_limits = ResourceLimits(
+        max_sessions=1,
+        max_memory_read_bytes=2,
+        max_memory_write_bytes=1,
+        max_snapshot_stack_bytes=8,
+    )
 
     memory = await service.read_memory(
         ReadMemoryRequest(session_id="session_01", address="0x20000000", length=4)
+    )
+    write = await service.write_memory(
+        WriteMemoryRequest(session_id="session_01", address="0x20000000", data_hex="0102")
+    )
+    snapshot = await service.debug_snapshot(
+        DebugSnapshotRequest(session_id="session_01", include_stack=True, stack_bytes=16)
     )
     connect = await service.connect_target(
         ConnectTargetRequest(
@@ -389,8 +449,61 @@ async def test_tool_service_enforces_resource_limits(tmp_path: Path) -> None:
 
     assert memory.error is not None
     assert memory.error.code == "RESOURCE_LIMIT_EXCEEDED"
+    assert write.error is not None
+    assert write.error.code == "RESOURCE_LIMIT_EXCEEDED"
+    assert snapshot.error is not None
+    assert snapshot.error.code == "RESOURCE_LIMIT_EXCEEDED"
     assert connect.error is not None
     assert connect.error.code == "RESOURCE_LIMIT_EXCEEDED"
+
+@pytest.mark.asyncio
+async def test_tool_service_rejects_concurrent_session_operation(tmp_path: Path) -> None:
+    service, session = make_service(tmp_path, permission=PermissionLevel.FULL_CONTROL)
+    service.resource_limits = ResourceLimits(max_session_operations=1)
+    resume_started = asyncio.Event()
+    release_resume = asyncio.Event()
+
+    async def slow_resume(*, max_run_ms: int, auto_interrupt: bool = True) -> TargetState:
+        session.calls.append(f"resume:{max_run_ms}:{auto_interrupt}")
+        resume_started.set()
+        await release_resume.wait()
+        return TargetState.RUNNING
+
+    session.resume = slow_resume  # type: ignore[method-assign]
+    first = asyncio.create_task(
+        service.resume(ResumeRequest(session_id="session_01", max_run_ms=100))
+    )
+    await resume_started.wait()
+
+    second = await service.read_registers(ReadRegistersRequest(session_id="session_01"))
+    release_resume.set()
+    first_result = await first
+
+    assert first_result.ok
+    assert second.error is not None
+    assert second.error.code == "RESOURCE_LIMIT_EXCEEDED"
+
+@pytest.mark.asyncio
+async def test_tool_service_surfaces_hardware_interlock_warnings(tmp_path: Path) -> None:
+    service, session = make_service(tmp_path, permission=PermissionLevel.FULL_CONTROL)
+    service.target_class = TargetClass.PRODUCTION_HARDWARE
+
+    denied = await service.reset_target(
+        ResetTargetRequest(session_id="session_01", mode=ResetMode.HALT)
+    )
+    service.hardware_operation_allowlist = frozenset({DebugOperation.RESET_TARGET})
+    confirmed_result = await confirmed(
+        service,
+        "reset_target",
+        ResetTargetRequest(session_id="session_01", mode=ResetMode.HALT),
+        session,
+    )
+
+    assert denied.error is not None
+    assert denied.error.code == "PERMISSION_DENIED"
+    assert denied.warnings
+    assert confirmed_result.ok
+    assert confirmed_result.warnings
 
 
 @pytest.mark.asyncio
@@ -442,6 +555,36 @@ async def test_tool_service_compare_explain_and_suggest(tmp_path: Path) -> None:
     assert suggest.ok
     assert suggest.data is not None
     assert suggest.data.actions[0].tool_name == "analyze_fault"
+
+
+@pytest.mark.asyncio
+async def test_tool_service_inspects_peripheral_from_svd(tmp_path: Path) -> None:
+    svd_path = tmp_path / "demo.svd"
+    svd_path.write_text(
+        """
+<device><name>Demo</name><peripherals><peripheral>
+<name>GPIOA</name><baseAddress>0x40020000</baseAddress>
+<registers><register><name>MODER</name><addressOffset>0x00</addressOffset>
+<fields><field><name>MODE0</name><bitOffset>0</bitOffset><bitWidth>2</bitWidth></field>
+</fields></register></registers>
+</peripheral></peripherals></device>
+""",
+        encoding="utf-8",
+    )
+    service, _session = make_service(tmp_path)
+
+    result = await service.inspect_peripheral(
+        InspectPeripheralRequest(
+            session_id="session_01",
+            svd_path=str(svd_path),
+            peripheral="GPIOA",
+        )
+    )
+
+    assert result.ok
+    assert result.data is not None
+    assert result.data.device == "Demo"
+    assert result.data.registers[0].name == "MODER"
 
 
 @pytest.mark.asyncio

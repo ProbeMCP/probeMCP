@@ -101,3 +101,25 @@ require:
 
 If the timeout expires and `auto_interrupt` is true, ProbeMCP should interrupt
 the target. If interrupt fails, the session state must become `unknown`.
+
+## Resource Limits
+
+Default local limits are intentionally conservative:
+
+- active sessions: 4
+- memory read size: 4096 bytes
+- memory write size: 256 bytes, and still disabled unless policy enables it
+- snapshot stack capture: 4096 bytes
+- concurrent tool calls: 8
+- active operations per session: 1
+- queued MI commands per controller: 32
+
+Limit failures return structured `RESOURCE_LIMIT_EXCEEDED` errors and are
+recorded in the audit log when audit logging is configured.
+
+## Hardware Interlocks
+
+`lab-hardware` and `production-hardware` targets require explicit local
+`hardware_operation_allowlist` opt-in before target-changing operations can run.
+Production hardware also requires a fresh confirmation token for high-risk
+control operations even when the server is in `full-control` mode.

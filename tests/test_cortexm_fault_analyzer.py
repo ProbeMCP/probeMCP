@@ -1,6 +1,7 @@
 from probemcp.analyzers.cortexm import CortexMFaultAnalyzer
 from probemcp.mcp_server.schemas import TargetState
 from probemcp.snapshots.models import DebugSnapshot
+from probemcp.symbols import DisassemblyInstruction, SymbolContext
 
 
 def test_cortexm_fault_analyzer_decodes_usage_fault_invstate() -> None:
@@ -99,3 +100,30 @@ def test_cortexm_fault_analyzer_handles_malformed_numbers_and_short_stack() -> N
 
     assert result.fault_type == "HardFault: VECTTBL"
     assert any("no complete frame" in item for item in result.evidence)
+
+def test_cortexm_fault_analyzer_includes_symbol_context_without_overclaiming() -> None:
+    snapshot = DebugSnapshot(
+        session_id="session_01",
+        state=TargetState.HALTED,
+        core_registers={"pc": "0x08001234"},
+        fault_registers={"cfsr": "0x00010000"},
+        symbol_context=SymbolContext(
+            address="0x08001234",
+            symbol="main",
+            source="/workspace/main.c:42",
+            disassembly=[
+                DisassemblyInstruction(
+                    address="0x08001234",
+                    function="main",
+                    instruction="udf #0",
+                )
+            ],
+            confidence=0.9,
+        ),
+    )
+
+    result = CortexMFaultAnalyzer().analyze(snapshot)
+
+    assert result.decoded_registers["symbol_context"]["symbol"] == "main"
+    assert result.decoded_registers["faulting_instruction"] == "udf #0"
+    assert any("resolves near main" in item for item in result.evidence)

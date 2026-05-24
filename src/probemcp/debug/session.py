@@ -19,19 +19,24 @@ from probemcp.mcp_server.schemas import (
     ResetMode,
     StepInstructionData,
     TargetState,
+    WriteMemoryData,
 )
 from probemcp.mi.commands import (
     break_delete,
     break_insert,
+    data_disassemble,
     data_list_register_values,
     data_read_memory_bytes,
+    data_write_memory_bytes,
     exec_continue,
     exec_interrupt,
     exec_step_instruction,
     gdb_exit,
+    stack_info_frame,
 )
 from probemcp.mi.controller import MIController, MITimeoutError
 from probemcp.mi.records import MIRecord, MIValue
+from probemcp.symbols import SymbolContext, symbol_context_from_mi
 from probemcp.targets import normalize_registers
 
 
@@ -75,9 +80,11 @@ class DebugSession:
     async def disconnect(self, *, timeout_ms: int = 5000) -> None:
         """Disconnect by asking GDB to exit, then closing the transport."""
 
-        await self.controller.execute(gdb_exit(), timeout_ms=timeout_ms)
-        await self.controller.close()
-        self.state_machine.transition(TargetState.DISCONNECTED, "disconnect requested")
+        try:
+            await self.controller.execute(gdb_exit(), timeout_ms=timeout_ms)
+        finally:
+            await self.controller.close()
+            self.state_machine.transition(TargetState.DISCONNECTED, "disconnect requested")
 
     async def halt(self, *, timeout_ms: int = 2000) -> HaltData:
         """Interrupt a running target."""
@@ -94,8 +101,12 @@ class DebugSession:
             await self.controller.execute(exec_continue(), timeout_ms=max_run_ms)
         except MITimeoutError:
             if auto_interrupt:
-                await self.halt(timeout_ms=2000)
-                return self.state
+                try:
+                    await self.halt(timeout_ms=2000)
+                    return self.state
+                except Exception as exc:
+                    self.state_machine.transition(TargetState.DEGRADED, f"interrupt failed: {exc}")
+                    return self.state
             self.state_machine.transition(TargetState.UNKNOWN, "resume timed out")
             return self.state
 
@@ -137,6 +148,35 @@ class DebugSession:
         )
         data_hex = _parse_memory_contents(result.result_record)
         return ReadMemoryData(address=address, length=length, width=width, data_hex=data_hex)
+
+    async def write_memory(
+        self,
+        *,
+        address: str,
+        data_hex: str,
+        expected_old_hex: str | None = None,
+        timeout_ms: int = 3000,
+    ) -> WriteMemoryData:
+        """Write target memory bytes after optional compare-before-write."""
+
+        if expected_old_hex is not None:
+            current = await self.read_memory(
+                address=address,
+                length=len(bytes.fromhex(expected_old_hex)),
+                timeout_ms=timeout_ms,
+            )
+            if current.data_hex.lower() != expected_old_hex.lower():
+                raise DebugSessionError("expected_old_hex did not match current memory")
+
+        await self.controller.execute(
+            data_write_memory_bytes(address, data_hex),
+            timeout_ms=timeout_ms,
+        )
+        return WriteMemoryData(
+            address=address,
+            bytes_written=len(bytes.fromhex(data_hex)),
+            verified_old_value=expected_old_hex is not None,
+        )
 
     async def set_breakpoint(
         self,
@@ -186,6 +226,35 @@ class DebugSession:
             self.state_machine.transition(TargetState.RUNNING, "reset run requested")
         return self.state
 
+
+    async def symbol_context(
+        self,
+        *,
+        address: str,
+        instruction_count: int = 6,
+        timeout_ms: int = 3000,
+    ) -> SymbolContext:
+        """Resolve current-frame symbol/source and nearby disassembly context."""
+
+        frame: MIValue | None = None
+        asm_insns: MIValue | None = None
+        try:
+            frame_result = await self.controller.execute(stack_info_frame(), timeout_ms=timeout_ms)
+            frame = frame_result.result_record.results.get("frame")
+        except Exception:
+            frame = None
+
+        if instruction_count > 0:
+            try:
+                disassembly_result = await self.controller.execute(
+                    data_disassemble(address, instruction_count=instruction_count),
+                    timeout_ms=timeout_ms,
+                )
+                asm_insns = disassembly_result.result_record.results.get("asm_insns")
+            except Exception:
+                asm_insns = None
+
+        return symbol_context_from_mi(address=address, frame=frame, asm_insns=asm_insns)
 
 def _parse_register_values(record: MIRecord) -> dict[str, str]:
     raw_values = record.results.get("register-values")

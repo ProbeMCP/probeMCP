@@ -6,12 +6,15 @@ from probemcp.mcp_server.schemas import (
     ConnectTargetRequest,
     DebugError,
     ErrorCategory,
+    InspectPeripheralRequest,
     PermissionLevel,
     ReadMemoryRequest,
     RegisterGroup,
     TargetState,
     ToolResult,
+    WriteMemoryData,
 )
+from probemcp.schemas_export import export_public_json_schemas
 
 
 def test_success_tool_result_serializes_to_json_contract() -> None:
@@ -125,3 +128,31 @@ def test_register_group_serializes_as_tool_contract_value() -> None:
     payload = {"session_id": "session_01", "group": RegisterGroup.FAULT}
 
     assert payload["group"] == "fault"
+
+
+def test_write_memory_and_inspect_peripheral_contracts() -> None:
+    write = WriteMemoryData(address="0x20000000", bytes_written=2, verified_old_value=True)
+    inspect = InspectPeripheralRequest(
+        session_id="session_01",
+        svd_path="demo.svd",
+        peripheral="GPIOA",
+        registers=["MODER"],
+    )
+
+    assert write.model_dump(mode="json")["verified_old_value"] is True
+    assert inspect.registers == ["MODER"]
+
+def test_debug_snapshot_symbol_context_defaults_are_bounded() -> None:
+    from probemcp.mcp_server.schemas import DebugSnapshotRequest
+
+    request = DebugSnapshotRequest(session_id="session_01")
+
+    assert request.include_symbol_context is True
+    assert request.disassembly_instructions == 6
+
+
+def test_public_json_schema_export_includes_requests() -> None:
+    schemas = export_public_json_schemas()
+
+    assert "ConnectTargetRequest" in schemas
+    assert "InspectPeripheralData" in schemas

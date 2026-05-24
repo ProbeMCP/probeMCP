@@ -9,7 +9,7 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from probemcp.mcp_server.schemas import BackendKind, PermissionLevel, SchemaModel
-from probemcp.safety.policy import TargetClass
+from probemcp.safety.policy import DebugOperation, TargetClass
 
 CONFIG_SCHEMA_VERSION = 1
 
@@ -22,8 +22,14 @@ class ServerConfig(SchemaModel):
     audit_log_path: str | None = None
     max_sessions: int = Field(default=4, ge=1, le=64)
     max_memory_read_bytes: int = Field(default=4096, ge=1, le=1_048_576)
+    max_memory_write_bytes: int = Field(default=256, ge=1, le=65_536)
+    max_snapshot_stack_bytes: int = Field(default=4096, ge=0, le=65_536)
+    max_concurrent_tool_calls: int = Field(default=8, ge=1, le=128)
+    max_session_operations: int = Field(default=1, ge=1, le=16)
+    max_mi_command_queue: int = Field(default=32, ge=1, le=1024)
     confirmation_ttl_seconds: int = Field(default=300, ge=1, le=86_400)
     memory_write_enabled: bool = False
+    hardware_operation_allowlist: list[DebugOperation] = Field(default_factory=list)
 
 
 class TargetProfile(SchemaModel):

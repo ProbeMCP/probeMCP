@@ -2,9 +2,16 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from probemcp.lab.interfaces import InMemorySerialCapture, NoopPowerController
 from probemcp.lab.inventory import LabTarget, TargetInventory, TargetLock
-from probemcp.mcp_server.schemas import BackendKind
-from probemcp.rtos.freertos import FreeRTOSTask, FreeRTOSTaskState, summarize_tasks
+from probemcp.mcp_server.schemas import BackendKind, PeripheralRegisterData
+from probemcp.peripherals import detect_common_misconfigurations, diff_peripheral_registers
+from probemcp.rtos.freertos import (
+    FreeRTOSTask,
+    FreeRTOSTaskState,
+    decode_task_records,
+    summarize_tasks,
+)
 from probemcp.safety.policy import TargetClass
 from probemcp.svd import SVDField, load_svd
 
@@ -72,6 +79,50 @@ def test_freertos_task_summary_flags_current_and_low_stack_tasks() -> None:
     assert summary["low_stack_tasks"] == ["worker"]
 
 
+def test_freertos_decodes_sanitized_task_records() -> None:
+    tasks = decode_task_records(
+        [
+            {
+                "tcb": "0x20000000",
+                "name": "main",
+                "state": "running",
+                "priority": 4,
+                "stack_pointer": "0x20001000",
+                "stack_high_water_mark": 64,
+            }
+        ],
+        current_tcb="0x20000000",
+    )
+
+    assert tasks[0].current
+    assert tasks[0].stack_pointer == "0x20001000"
+
+
+def test_peripheral_diffing_and_heuristics() -> None:
+    before = [
+        PeripheralRegisterData(
+            name="MODER",
+            address="0x40020000",
+            value="0x00000000",
+            fields={"MODE0": 0},
+        )
+    ]
+    after = [
+        PeripheralRegisterData(
+            name="MODER",
+            address="0x40020000",
+            value="0x00000001",
+            fields={"MODE0": 1},
+        )
+    ]
+
+    diffs = diff_peripheral_registers(before, after)
+    heuristics = detect_common_misconfigurations("GPIOA", before)
+
+    assert diffs[0].changed_fields == {"MODE0": (0, 1)}
+    assert heuristics[0].title == "GPIO pins appear to be in reset/input mode"
+
+
 def test_target_inventory_locks_and_releases_targets() -> None:
     inventory = TargetInventory(
         [
@@ -107,3 +158,19 @@ def test_target_lock_expiry_and_missing_target_errors() -> None:
         inventory.acquire("missing", owner="test")
     with pytest.raises(KeyError, match="lock not found"):
         inventory.release("missing")
+
+
+@pytest.mark.asyncio
+async def test_fake_serial_and_power_adapters() -> None:
+    serial = InMemorySerialCapture()
+    power = NoopPowerController()
+
+    await serial.start()
+    serial.append_line("boot")
+    await serial.stop()
+    await power.power_on()
+    await power.power_cycle()
+    await power.power_off()
+
+    assert await serial.read_lines() == ["boot"]
+    assert power.actions == ["on", "cycle", "off"]

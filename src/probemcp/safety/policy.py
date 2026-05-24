@@ -32,6 +32,7 @@ class DebugOperation(StrEnum):
     ANALYZE_FAULT = "analyze_fault"
     COMPARE_SNAPSHOTS = "compare_snapshots"
     EXPLAIN_CURRENT_STATE = "explain_current_state"
+    INSPECT_PERIPHERAL = "inspect_peripheral"
     SUGGEST_NEXT_DEBUG_STEPS = "suggest_next_debug_steps"
 
 
@@ -48,6 +49,7 @@ class TargetClass(StrEnum):
 
     EMULATOR = "emulator"
     DEVELOPMENT_HARDWARE = "development-hardware"
+    LAB_HARDWARE = "lab-hardware"
     PRODUCTION_HARDWARE = "production-hardware"
     UNKNOWN = "unknown"
 
@@ -68,6 +70,7 @@ READ_ONLY_OPERATIONS = frozenset(
         DebugOperation.COMPARE_SNAPSHOTS,
         DebugOperation.DEBUG_SNAPSHOT,
         DebugOperation.EXPLAIN_CURRENT_STATE,
+        DebugOperation.INSPECT_PERIPHERAL,
         DebugOperation.SUGGEST_NEXT_DEBUG_STEPS,
     }
 )
@@ -85,6 +88,24 @@ TARGET_CHANGING_OPERATIONS = frozenset(
     }
 )
 
+HARDWARE_INTERLOCK_CLASSES = frozenset(
+    {
+        TargetClass.LAB_HARDWARE,
+        TargetClass.PRODUCTION_HARDWARE,
+    }
+)
+
+PRODUCTION_CONFIRMATION_OPERATIONS = frozenset(
+    {
+        DebugOperation.DISCONNECT_TARGET,
+        DebugOperation.HALT,
+        DebugOperation.RESUME,
+        DebugOperation.STEP_INSTRUCTION,
+        DebugOperation.RESET_TARGET,
+        DebugOperation.WRITE_MEMORY,
+    }
+)
+
 
 class PolicyRequest(SchemaModel):
     """Input to the safety policy engine."""
@@ -96,6 +117,7 @@ class PolicyRequest(SchemaModel):
     production_target: bool = False
     memory_write_enabled: bool = False
     confirmation_token: str | None = None
+    hardware_operation_allowlist: frozenset[DebugOperation] = Field(default_factory=frozenset)
 
 
 class PolicyDecision(SchemaModel):
@@ -163,6 +185,10 @@ class PolicyEngine:
         )
 
     def _evaluate_target_changing_operation(self, request: PolicyRequest) -> PolicyDecision:
+        interlock = self._evaluate_hardware_interlock(request)
+        if interlock is not None:
+            return interlock
+
         if request.production_target or request.target_class == TargetClass.PRODUCTION_HARDWARE:
             if request.permission_mode != PermissionLevel.FULL_CONTROL:
                 return PolicyDecision(
@@ -174,13 +200,17 @@ class PolicyEngine:
                     warnings=["Production hardware guardrail is active."],
                 )
 
-            if request.operation == DebugOperation.RESET_TARGET:
+            if (
+                request.operation in PRODUCTION_CONFIRMATION_OPERATIONS
+                and not request.confirmation_token
+            ):
                 return PolicyDecision(
-                    kind=PolicyDecisionKind.DENY,
+                    kind=PolicyDecisionKind.REQUIRE_CONFIRMATION,
                     operation=request.operation,
                     required_permission=PermissionLevel.FULL_CONTROL,
-                    reason="Production reset is denied by default.",
-                    warnings=["Production reset must be explicitly enabled by a future policy."],
+                    reason="Production hardware operation requires an explicit confirmation token.",
+                    confirmation_required=True,
+                    warnings=["Production hardware guardrail is active."],
                 )
 
         if request.permission_mode == PermissionLevel.READONLY:
@@ -214,9 +244,14 @@ class PolicyEngine:
             operation=request.operation,
             required_permission=PermissionLevel.FULL_CONTROL,
             reason="Full-control mode allows this target-changing operation.",
+            warnings=self._hardware_warnings(request),
         )
 
     def _evaluate_memory_write(self, request: PolicyRequest) -> PolicyDecision:
+        interlock = self._evaluate_hardware_interlock(request)
+        if interlock is not None:
+            return interlock
+
         if not request.memory_write_enabled:
             return PolicyDecision(
                 kind=PolicyDecisionKind.DENY,
@@ -234,10 +269,52 @@ class PolicyEngine:
                 confirmation_required=True,
             )
 
+        if request.target_class == TargetClass.PRODUCTION_HARDWARE:
+            return PolicyDecision(
+                kind=PolicyDecisionKind.DENY,
+                operation=request.operation,
+                required_permission=PermissionLevel.FULL_CONTROL,
+                reason="Production memory writes are denied by default.",
+            )
+
+        if not request.confirmation_token:
+            return PolicyDecision(
+                kind=PolicyDecisionKind.REQUIRE_CONFIRMATION,
+                operation=request.operation,
+                required_permission=PermissionLevel.FULL_CONTROL,
+                reason="Memory writes require an explicit confirmation token.",
+                confirmation_required=True,
+            )
+
         return PolicyDecision(
             kind=PolicyDecisionKind.ALLOW,
             operation=request.operation,
             required_permission=PermissionLevel.FULL_CONTROL,
             reason="Memory write is enabled and full-control permission is active.",
-            warnings=["Memory write policy must still validate address ranges before execution."],
+            warnings=[
+                *self._hardware_warnings(request),
+                "Memory write policy must still validate address ranges before execution.",
+            ],
         )
+
+    def _evaluate_hardware_interlock(self, request: PolicyRequest) -> PolicyDecision | None:
+        if request.target_class not in HARDWARE_INTERLOCK_CLASSES:
+            return None
+        if request.operation in request.hardware_operation_allowlist:
+            return None
+        return PolicyDecision(
+            kind=PolicyDecisionKind.DENY,
+            operation=request.operation,
+            required_permission=PermissionLevel.FULL_CONTROL,
+            reason=(
+                f"{request.target_class.value} operation requires explicit local "
+                "hardware_operation_allowlist opt-in."
+            ),
+            warnings=[f"{request.target_class.value} hardware interlock blocked the operation."],
+        )
+
+    @staticmethod
+    def _hardware_warnings(request: PolicyRequest) -> list[str]:
+        if request.target_class in HARDWARE_INTERLOCK_CLASSES:
+            return [f"{request.target_class.value} hardware interlock allowed the operation."]
+        return []

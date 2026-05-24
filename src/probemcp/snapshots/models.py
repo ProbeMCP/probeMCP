@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from probemcp.mcp_server.schemas import SchemaModel, TargetState
+from probemcp.symbols import SymbolContext
 
 
 class DebugSnapshot(SchemaModel):
@@ -21,4 +22,5 @@ class DebugSnapshot(SchemaModel):
     fault_registers: dict[str, str] = Field(default_factory=dict)
     stack_address: str | None = None
     stack_data_hex: str | None = None
+    symbol_context: SymbolContext | None = None
     summary: str = ""

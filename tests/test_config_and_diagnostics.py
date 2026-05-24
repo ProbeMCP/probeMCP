@@ -31,6 +31,12 @@ target_class = "emulator"
 audit_log_path = "audit/probemcp.jsonl"
 max_sessions = 2
 max_memory_read_bytes = 64
+max_memory_write_bytes = 16
+max_snapshot_stack_bytes = 128
+max_concurrent_tool_calls = 3
+max_session_operations = 1
+max_mi_command_queue = 8
+hardware_operation_allowlist = ["halt", "resume"]
 
 [targets.demo]
 backend = "qemu"
@@ -46,6 +52,7 @@ profile = "cortex-m"
     assert config.get_target().backend == BackendKind.QEMU
     assert config.server.permission_mode == PermissionLevel.CONFIRM_REQUIRED
     assert config.server.max_memory_read_bytes == 64
+    assert config.server.hardware_operation_allowlist[0].value == "halt"
 
 
 def test_config_rejects_missing_default_target() -> None:
@@ -62,7 +69,12 @@ def test_create_tool_service_from_config_sets_limits_and_factory() -> None:
                     "target_class": "development-hardware",
                     "max_sessions": 1,
                     "max_memory_read_bytes": 32,
+                    "max_memory_write_bytes": 8,
+                    "max_snapshot_stack_bytes": 256,
+                    "max_concurrent_tool_calls": 2,
+                    "max_session_operations": 1,
                     "confirmation_ttl_seconds": 10,
+                    "hardware_operation_allowlist": ["reset_target"],
                 }
             }
         )
@@ -71,6 +83,8 @@ def test_create_tool_service_from_config_sets_limits_and_factory() -> None:
     assert service.session_factory is not None
     assert service.resource_limits.max_sessions == 1
     assert service.resource_limits.max_memory_read_bytes == 32
+    assert service.resource_limits.max_memory_write_bytes == 8
+    assert service.hardware_operation_allowlist
     assert service.permission_mode == PermissionLevel.FULL_CONTROL
 
 

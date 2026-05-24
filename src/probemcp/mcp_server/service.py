@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
 
+import structlog
 from pydantic import BaseModel
 
 from probemcp.analyzers.cortexm import CortexMFaultAnalyzer
@@ -28,6 +31,9 @@ from probemcp.mcp_server.schemas import (
     ExplainCurrentStateRequest,
     HaltData,
     HaltRequest,
+    InspectPeripheralData,
+    InspectPeripheralRequest,
+    PeripheralRegisterData,
     PermissionLevel,
     ReadMemoryData,
     ReadMemoryRequest,
@@ -46,6 +52,8 @@ from probemcp.mcp_server.schemas import (
     SuggestNextDebugStepsRequest,
     TargetState,
     ToolResult,
+    WriteMemoryData,
+    WriteMemoryRequest,
 )
 from probemcp.privacy import redact_mapping
 from probemcp.safety.confirmation import ConfirmationError, ConfirmationTokenStore
@@ -61,8 +69,11 @@ from probemcp.safety.policy import (
 from probemcp.sessions.manager import SessionManager, SessionNotFoundError
 from probemcp.snapshots.models import DebugSnapshot
 from probemcp.snapshots.service import SnapshotService
+from probemcp.svd import load_svd
 
 type SessionFactory = Callable[[ConnectTargetRequest], Awaitable[Any]]
+
+LOGGER = structlog.get_logger("probemcp.tool")
 
 
 @dataclass(slots=True)
@@ -78,9 +89,13 @@ class ToolService:
     permission_mode: PermissionLevel = PermissionLevel.READONLY
     target_class: TargetClass = TargetClass.UNKNOWN
     memory_write_enabled: bool = False
+    hardware_operation_allowlist: frozenset[DebugOperation] = frozenset()
     confirmation_store: ConfirmationTokenStore | None = None
     resource_limits: ResourceLimits = ResourceLimits()
     _snapshots: dict[str, DebugSnapshot] | None = None
+    _limit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _active_tool_calls: int = 0
+    _active_session_operations: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.snapshot_service is None:
@@ -128,6 +143,7 @@ class ToolService:
                 DebugOperation.CONNECT_TARGET,
                 decision.to_error(),
                 request,
+                warnings=decision.warnings,
             )
 
         try:
@@ -148,6 +164,7 @@ class ToolService:
                 data,
                 session_id=session.session_id,
                 target_state=session.state,
+                warnings=decision.warnings,
             )
         except Exception as exc:  # pragma: no cover - defensive envelope conversion
             return self._exception_failure(
@@ -299,6 +316,58 @@ class ToolService:
 
         return await self._with_session("read_memory", DebugOperation.READ_MEMORY, request, run)
 
+    async def write_memory(
+        self,
+        request: WriteMemoryRequest,
+        *,
+        confirmation_token: str | None = None,
+    ) -> ToolResult[WriteMemoryData]:
+        """Write memory through a disabled-by-default full-control policy."""
+
+        try:
+            write_length = len(bytes.fromhex(request.data_hex))
+        except ValueError as exc:
+            return self._failure(
+                operation=DebugOperation.WRITE_MEMORY,
+                tool_name="write_memory",
+                error=DebugError(
+                    code=ErrorCode.VALIDATION_FAILED.value,
+                    message=f"data_hex must be valid hexadecimal bytes: {exc}",
+                    category=ErrorCategory.VALIDATION,
+                ),
+                request=request,
+                session_id=request.session_id,
+            )
+
+        limit_error = self.resource_limits.check_memory_write(write_length)
+        if limit_error is not None:
+            return self._failure(
+                operation=DebugOperation.WRITE_MEMORY,
+                tool_name="write_memory",
+                error=limit_error,
+                request=request,
+                session_id=request.session_id,
+            )
+
+        async def run(session: Any) -> WriteMemoryData:
+            return cast(
+                WriteMemoryData,
+                await session.write_memory(
+                    address=request.address,
+                    data_hex=request.data_hex,
+                    expected_old_hex=request.expected_old_hex,
+                    timeout_ms=request.timeout_ms,
+                ),
+            )
+
+        return await self._with_session(
+            "write_memory",
+            DebugOperation.WRITE_MEMORY,
+            request,
+            run,
+            confirmation_token=confirmation_token,
+        )
+
     async def set_breakpoint(
         self,
         request: SetBreakpointRequest,
@@ -353,6 +422,17 @@ class ToolService:
 
     async def debug_snapshot(self, request: DebugSnapshotRequest) -> ToolResult[DebugSnapshotData]:
         """Capture a debug snapshot."""
+
+        if request.include_stack:
+            limit_error = self.resource_limits.check_snapshot_stack(request.stack_bytes)
+            if limit_error is not None:
+                return self._failure(
+                    operation=DebugOperation.DEBUG_SNAPSHOT,
+                    tool_name="debug_snapshot",
+                    error=limit_error,
+                    request=request,
+                    session_id=request.session_id,
+                )
 
         async def run(session: Any) -> DebugSnapshotData:
             assert self.snapshot_service is not None
@@ -415,6 +495,49 @@ class ToolService:
             data,
             session_id=snapshot.session_id,
             target_state=snapshot.state,
+        )
+
+    async def inspect_peripheral(
+        self,
+        request: InspectPeripheralRequest,
+    ) -> ToolResult[InspectPeripheralData]:
+        """Decode peripheral registers from a local SVD file and target memory."""
+
+        device = load_svd(Path(request.svd_path))
+        peripheral = device.peripheral(request.peripheral)
+        register_names = request.registers or sorted(peripheral.registers)
+
+        async def run(session: Any) -> InspectPeripheralData:
+            decoded_registers: list[PeripheralRegisterData] = []
+            for register_name in register_names:
+                register = peripheral.registers[register_name]
+                address = peripheral.register_address(register_name)
+                memory = await session.read_memory(
+                    address=f"0x{address:08x}",
+                    length=4,
+                    width=4,
+                    timeout_ms=request.timeout_ms,
+                )
+                value = int.from_bytes(bytes.fromhex(memory.data_hex), byteorder="little")
+                decoded_registers.append(
+                    PeripheralRegisterData(
+                        name=register.name,
+                        address=f"0x{address:08x}",
+                        value=f"0x{value:08x}",
+                        fields=register.decode(value),
+                    )
+                )
+            return InspectPeripheralData(
+                device=device.name,
+                peripheral=peripheral.name,
+                registers=decoded_registers,
+            )
+
+        return await self._with_session(
+            "inspect_peripheral",
+            DebugOperation.INSPECT_PERIPHERAL,
+            request,
+            run,
         )
 
     async def compare_snapshots(
@@ -561,6 +684,16 @@ class ToolService:
         assert self._snapshots is not None
         return self._snapshots.get(snapshot_id)
 
+    def list_audit_events(self) -> list[dict[str, Any]]:
+        """Return local audit events if an audit writer is configured."""
+
+        if self.audit_writer is None:
+            return []
+        return [
+            event.model_dump(mode="json", exclude_none=True)
+            for event in self.audit_writer.read_events()
+        ]
+
     def _snapshot_from_request(
         self,
         snapshot_id: str | None,
@@ -585,7 +718,13 @@ class ToolService:
     ) -> ToolResult[Any]:
         decision = self._evaluate(operation, request, confirmation_token)
         if not decision.allowed:
-            return self._policy_failure(tool_name, operation, decision.to_error(), request)
+            return self._policy_failure(
+                tool_name,
+                operation,
+                decision.to_error(),
+                request,
+                warnings=decision.warnings,
+            )
 
         try:
             session_id = cast(Any, request).session_id
@@ -603,6 +742,16 @@ class ToolService:
             )
 
         before_state = session.state
+        limit_error = await self._try_reserve_operation(session_id)
+        if limit_error is not None:
+            return self._failure(
+                operation=operation,
+                tool_name=tool_name,
+                error=limit_error,
+                request=request,
+                session_id=session_id,
+            )
+
         try:
             data = await call(session)
         except Exception as exc:  # pragma: no cover - defensive envelope conversion
@@ -613,6 +762,8 @@ class ToolService:
                 exc,
                 session_id=session_id,
             )
+        finally:
+            await self._release_operation(session_id)
 
         return self._success(
             tool_name,
@@ -622,7 +773,35 @@ class ToolService:
             session_id=session_id,
             target_state=session.state,
             before_state=before_state,
+            warnings=decision.warnings,
         )
+
+    async def _try_reserve_operation(self, session_id: str | None) -> DebugError | None:
+        async with self._limit_lock:
+            tool_error = self.resource_limits.check_tool_concurrency(self._active_tool_calls)
+            if tool_error is not None:
+                return tool_error
+
+            if session_id is not None:
+                session_active = self._active_session_operations.get(session_id, 0)
+                session_error = self.resource_limits.check_session_operations(session_active)
+                if session_error is not None:
+                    return session_error
+                self._active_session_operations[session_id] = session_active + 1
+
+            self._active_tool_calls += 1
+            return None
+
+    async def _release_operation(self, session_id: str | None) -> None:
+        async with self._limit_lock:
+            self._active_tool_calls = max(0, self._active_tool_calls - 1)
+            if session_id is None:
+                return
+            session_active = self._active_session_operations.get(session_id, 0)
+            if session_active <= 1:
+                self._active_session_operations.pop(session_id, None)
+            else:
+                self._active_session_operations[session_id] = session_active - 1
 
     def _evaluate(
         self,
@@ -651,6 +830,7 @@ class ToolService:
                 target_class=self.target_class,
                 memory_write_enabled=self.memory_write_enabled,
                 confirmation_token=validated_token,
+                hardware_operation_allowlist=self.hardware_operation_allowlist,
             )
         )
 
@@ -660,6 +840,8 @@ class ToolService:
         operation: DebugOperation,
         error: DebugError | None,
         request: BaseModel,
+        *,
+        warnings: list[str] | None = None,
     ) -> ToolResult[Any]:
         assert error is not None
         if error.code == ErrorCode.CONFIRMATION_REQUIRED.value:
@@ -684,6 +866,7 @@ class ToolService:
             tool_name=tool_name,
             error=error,
             request=request,
+            warnings=warnings,
         )
 
     def _success(
@@ -696,6 +879,7 @@ class ToolService:
         session_id: str | None = None,
         target_state: TargetState = TargetState.UNKNOWN,
         before_state: TargetState = TargetState.UNKNOWN,
+        warnings: list[str] | None = None,
     ) -> ToolResult[Any]:
         audit_id = self._audit(
             tool_name=tool_name,
@@ -706,12 +890,14 @@ class ToolService:
             before_state=before_state,
             after_state=target_state,
             result_summary=_summary(data),
+            warnings=warnings or [],
         )
         return ToolResult(
             ok=True,
             session_id=session_id,
             target_state=target_state,
             data=data,
+            warnings=warnings or [],
             audit_id=audit_id,
         )
 
@@ -723,6 +909,7 @@ class ToolService:
         error: DebugError,
         request: BaseModel,
         session_id: str | None = None,
+        warnings: list[str] | None = None,
     ) -> ToolResult[Any]:
         audit_id = self._audit(
             tool_name=tool_name,
@@ -731,8 +918,15 @@ class ToolService:
             outcome=AuditOutcome.ERROR,
             session_id=session_id,
             error=error,
+            warnings=warnings or [],
         )
-        return ToolResult(ok=False, session_id=session_id, audit_id=audit_id, error=error)
+        return ToolResult(
+            ok=False,
+            session_id=session_id,
+            warnings=warnings or [],
+            audit_id=audit_id,
+            error=error,
+        )
 
     def _exception_failure(
         self,
@@ -767,6 +961,7 @@ class ToolService:
         after_state: TargetState = TargetState.UNKNOWN,
         result_summary: dict[str, Any] | None = None,
         error: DebugError | None = None,
+        warnings: list[str] | None = None,
     ) -> str | None:
         if self.audit_writer is None:
             return None
@@ -780,9 +975,19 @@ class ToolService:
             outcome=outcome,
             request_summary=_summary(request),
             result_summary=result_summary or {},
+            warnings=warnings or [],
             error=error,
         )
         self.audit_writer.append(event)
+        LOGGER.info(
+            "tool_call_audited",
+            audit_id=event.audit_id,
+            correlation_id=event.correlation_id,
+            tool_name=tool_name,
+            operation=operation.value,
+            outcome=outcome.value,
+            session_id=session_id,
+        )
         return event.audit_id
 
 

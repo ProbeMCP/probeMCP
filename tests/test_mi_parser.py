@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 from probemcp.mi.errors import MIParseError
@@ -99,3 +101,29 @@ def test_invalid_input_raises_structured_parse_error() -> None:
 
     assert exc.value.line == "^done,broken"
     assert exc.value.position > 0
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '1^done,value="unterminated',
+        '1^done,tuple={name="r0",value="0x1"',
+        '1^done,list=[{name="r0",value="0x1"}',
+        '1^done,unicode="µ",trailing',
+        '1^done,bytes="\\xff\\xfe",bad={]',
+        '*stopped,frame={addr="0x08000000",func="main",args=[name="x",value=]}',
+    ],
+)
+def test_malformed_mi_seed_corpus_fails_with_structured_errors(line: str) -> None:
+    with pytest.raises(MIParseError):
+        parse_mi_record(line)
+
+def test_deterministic_fuzz_inputs_do_not_escape_parser_errors() -> None:
+    rng = random.Random(0)  # noqa: S311 - deterministic parser fuzzing, not security
+    alphabet = '^*+=~@&,"{}[]_abcdefghijklmnopqrstuvwxyz0123456789\\'
+
+    for _ in range(500):
+        line = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 96)))
+        try:
+            parse_mi_record(line)
+        except MIParseError:
+            continue

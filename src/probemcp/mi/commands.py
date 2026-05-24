@@ -15,12 +15,15 @@ class MICommandName(StrEnum):
     GDB_EXIT = "gdb-exit"
     DATA_LIST_REGISTER_VALUES = "data-list-register-values"
     DATA_READ_MEMORY_BYTES = "data-read-memory-bytes"
+    DATA_WRITE_MEMORY_BYTES = "data-write-memory-bytes"
     EXEC_INTERRUPT = "exec-interrupt"
     EXEC_CONTINUE = "exec-continue"
     EXEC_STEP_INSTRUCTION = "exec-step-instruction"
     BREAK_INSERT = "break-insert"
     BREAK_DELETE = "break-delete"
     INTERPRETER_EXEC = "interpreter-exec"
+    STACK_INFO_FRAME = "stack-info-frame"
+    DATA_DISASSEMBLE = "data-disassemble"
 
 ALLOWLISTED_CONSOLE_COMMANDS = frozenset(
     {
@@ -69,6 +72,25 @@ def data_read_memory_bytes(address: str, length: int) -> MICommand:
     """Build a memory read command."""
 
     return MICommand(MICommandName.DATA_READ_MEMORY_BYTES, (address, str(length)))
+
+
+def data_write_memory_bytes(address: str, data_hex: str) -> MICommand:
+    """Build a memory write command."""
+
+    return MICommand(MICommandName.DATA_WRITE_MEMORY_BYTES, (address, data_hex))
+
+def stack_info_frame() -> MICommand:
+    """Build a current-frame symbol/source lookup command."""
+
+    return MICommand(MICommandName.STACK_INFO_FRAME)
+
+def data_disassemble(address: str, *, instruction_count: int = 6) -> MICommand:
+    """Build a bounded disassembly command around an address."""
+
+    return MICommand(
+        MICommandName.DATA_DISASSEMBLE,
+        ("-a", address, "-n", str(instruction_count), "--", "0"),
+    )
 
 
 def exec_interrupt() -> MICommand:

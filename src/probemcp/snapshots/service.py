@@ -6,6 +6,7 @@ from typing import Protocol
 
 from probemcp.mcp_server.schemas import DebugSnapshotRequest, ReadMemoryData, RegisterGroup
 from probemcp.snapshots.models import DebugSnapshot
+from probemcp.symbols import SymbolContext
 from probemcp.targets import normalize_registers
 
 FAULT_REGISTER_ADDRESSES = {
@@ -54,6 +55,7 @@ class SnapshotService:
         fault_registers: dict[str, str] = {}
         stack_address: str | None = None
         stack_data_hex: str | None = None
+        symbol_context: SymbolContext | None = None
 
         if request.include_core_registers:
             core_registers = normalize_registers(await target.read_registers(RegisterGroup.CORE))
@@ -71,7 +73,15 @@ class SnapshotService:
                 )
                 stack_data_hex = memory.data_hex
 
-        summary = _build_summary(core_registers, fault_registers)
+        pc = core_registers.get("pc") or core_registers.get("15")
+        resolver = getattr(target, "symbol_context", None)
+        if request.include_symbol_context and pc is not None and callable(resolver):
+            symbol_context = await resolver(
+                address=pc,
+                instruction_count=request.disassembly_instructions,
+            )
+
+        summary = _build_summary(core_registers, fault_registers, symbol_context)
         return DebugSnapshot(
             session_id=session_id,
             state=target.state,  # type: ignore[arg-type]
@@ -79,6 +89,7 @@ class SnapshotService:
             fault_registers=fault_registers,
             stack_address=stack_address,
             stack_data_hex=stack_data_hex,
+            symbol_context=symbol_context,
             summary=summary,
         )
 
@@ -100,11 +111,18 @@ def _select_stack_pointer(registers: dict[str, str]) -> str | None:
     return registers.get("sp") or registers.get("13") or registers.get("msp")
 
 
-def _build_summary(core_registers: dict[str, str], fault_registers: dict[str, str]) -> str:
+def _build_summary(
+    core_registers: dict[str, str],
+    fault_registers: dict[str, str],
+    symbol_context: SymbolContext | None = None,
+) -> str:
     pc = core_registers.get("pc") or core_registers.get("15")
     cfsr = fault_registers.get("cfsr")
+    symbol = symbol_context.symbol if symbol_context is not None else None
     if pc and cfsr:
-        return f"Target snapshot captured at PC {pc} with CFSR {cfsr}."
+        location = f" ({symbol})" if symbol else ""
+        return f"Target snapshot captured at PC {pc}{location} with CFSR {cfsr}."
     if pc:
-        return f"Target snapshot captured at PC {pc}."
+        location = f" ({symbol})" if symbol else ""
+        return f"Target snapshot captured at PC {pc}{location}."
     return "Target snapshot captured."

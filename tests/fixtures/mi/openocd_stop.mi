@@ -1,0 +1,4 @@
+&"monitor reset halt\n"
+3^done
+*stopped,reason="signal-received",signal-name="SIGINT",frame={addr="0x08000004",func="Reset_Handler"}
+4^done

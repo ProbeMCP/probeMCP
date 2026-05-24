@@ -21,6 +21,7 @@ from probemcp.mcp_server.schemas import (
     ExplainCurrentStateRequest,
     HaltPolicy,
     HaltRequest,
+    InspectPeripheralRequest,
     ReadMemoryRequest,
     ReadRegistersRequest,
     RegisterGroup,
@@ -30,10 +31,12 @@ from probemcp.mcp_server.schemas import (
     SetBreakpointRequest,
     StepInstructionRequest,
     SuggestNextDebugStepsRequest,
+    WriteMemoryRequest,
 )
 from probemcp.mcp_server.service import ToolService
 from probemcp.mcp_server.tools import ToolRegistry
 from probemcp.safety.policy import PolicyEngine
+from probemcp.schemas_export import export_public_json_schemas
 from probemcp.sessions.manager import SessionManager
 
 
@@ -92,6 +95,40 @@ def create_app(
         if snapshot is None:
             return json.dumps({"error": "SNAPSHOT_NOT_FOUND", "snapshot_id": snapshot_id})
         return snapshot.model_dump_json()
+
+    @app.resource(
+        "probemcp://audit",
+        name="audit",
+        description="Local ProbeMCP audit events.",
+        mime_type="application/json",
+    )
+    def audit_resource() -> str:
+        """Expose local audit events as a read-only MCP resource."""
+
+        return json.dumps({"events": tool_service.list_audit_events()})
+
+    @app.resource(
+        "probemcp://schema",
+        name="schema",
+        description="ProbeMCP public schema metadata.",
+        mime_type="application/json",
+    )
+    def schema_resource() -> str:
+        """Expose public schema metadata for MCP clients."""
+
+        return json.dumps(
+            {
+                "schema_version": "0.1",
+                "tools": [tool.name for tool in tool_registry.list()],
+                "resources": [
+                    "probemcp://sessions",
+                    "probemcp://snapshots/{snapshot_id}",
+                    "probemcp://audit",
+                    "probemcp://schema",
+                ],
+                "json_schemas": export_public_json_schemas(),
+            }
+        )
 
     @app.tool()
     async def connect_target(
@@ -242,6 +279,29 @@ def create_app(
         return result.model_dump(mode="json")
 
     @app.tool()
+    async def write_memory(
+        session_id: str,
+        address: str,
+        data_hex: str,
+        expected_old_hex: str | None = None,
+        timeout_ms: int = 3000,
+        confirmation_token: str | None = None,
+    ) -> dict[str, object]:
+        """Write target memory when explicitly enabled by full-control policy."""
+
+        result = await tool_service.write_memory(
+            WriteMemoryRequest(
+                session_id=session_id,
+                address=address,
+                data_hex=data_hex,
+                expected_old_hex=expected_old_hex,
+                timeout_ms=timeout_ms,
+            ),
+            confirmation_token=confirmation_token,
+        )
+        return result.model_dump(mode="json")
+
+    @app.tool()
     async def set_breakpoint(
         session_id: str,
         location_kind: Literal["symbol", "address", "file-line"],
@@ -295,6 +355,8 @@ def create_app(
         include_fault_registers: bool = True,
         include_stack: bool = False,
         stack_bytes: int = 128,
+        include_symbol_context: bool = True,
+        disassembly_instructions: int = 6,
     ) -> dict[str, object]:
         """Capture a structured debug snapshot."""
 
@@ -306,6 +368,8 @@ def create_app(
                 include_fault_registers=include_fault_registers,
                 include_stack=include_stack,
                 stack_bytes=stack_bytes,
+                include_symbol_context=include_symbol_context,
+                disassembly_instructions=disassembly_instructions,
             )
         )
         return result.model_dump(mode="json")
@@ -319,6 +383,27 @@ def create_app(
 
         result = await tool_service.analyze_fault(
             AnalyzeFaultRequest(session_id=session_id, snapshot_id=snapshot_id)
+        )
+        return result.model_dump(mode="json")
+
+    @app.tool()
+    async def inspect_peripheral(
+        session_id: str,
+        svd_path: str,
+        peripheral: str,
+        registers: list[str] | None = None,
+        timeout_ms: int = 3000,
+    ) -> dict[str, object]:
+        """Decode peripheral registers using a local SVD file."""
+
+        result = await tool_service.inspect_peripheral(
+            InspectPeripheralRequest(
+                session_id=session_id,
+                svd_path=svd_path,
+                peripheral=peripheral,
+                registers=registers,
+                timeout_ms=timeout_ms,
+            )
         )
         return result.model_dump(mode="json")
 

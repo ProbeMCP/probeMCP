@@ -111,6 +111,7 @@ Primitive tools:
 - `reset_target`
 - `read_registers`
 - `read_memory`
+- `write_memory` (disabled by default)
 - `set_breakpoint`
 - `clear_breakpoint`
 
@@ -118,6 +119,7 @@ High-level tools:
 
 - `debug_snapshot`
 - `analyze_fault`
+- `inspect_peripheral`
 - `compare_snapshots`
 - `explain_current_state`
 - `suggest_next_debug_steps`
@@ -146,6 +148,7 @@ Additional hardening docs:
 - [security threat model](docs/security-threat-model.md)
 - [privacy and redaction](docs/privacy-redaction.md)
 - [compatibility matrix](docs/compatibility-matrix.md)
+- [MCP client setup](docs/mcp-client-setup.md)
 - [troubleshooting](docs/troubleshooting.md)
 
 ## Development

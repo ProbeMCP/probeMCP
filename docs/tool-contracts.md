@@ -251,7 +251,9 @@ Request:
   "include_core_registers": true,
   "include_fault_registers": true,
   "include_stack": true,
-  "stack_bytes": 128
+  "stack_bytes": 128,
+  "include_symbol_context": true,
+  "disassembly_instructions": 6
 }
 ```
 
@@ -300,6 +302,26 @@ Response data:
   ]
 }
 ```
+
+### `inspect_peripheral`
+
+Permission: `readonly`.
+
+Request:
+
+```json
+{
+  "session_id": "session_01",
+  "svd_path": "/workspace/vendor/device.svd",
+  "peripheral": "GPIOA",
+  "registers": ["MODER"],
+  "timeout_ms": 3000
+}
+```
+
+Response data contains decoded register values and bit fields from the local
+SVD file. The server never reads arbitrary files except the explicitly supplied
+SVD path.
 
 ### `compare_snapshots`
 

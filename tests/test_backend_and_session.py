@@ -134,6 +134,59 @@ async def test_debug_session_breakpoint_flow() -> None:
 
 
 @pytest.mark.asyncio
+async def test_debug_session_write_memory_with_compare_before_write() -> None:
+    controller = FakeController(
+        [
+            '1^done,memory=[{begin="0x20000000",offset="0x0",end="0x20000002",contents="0000"}]',
+            "2^done",
+        ]
+    )
+    session = DebugSession(
+        controller=cast(MIController, controller),
+        backend=GenericRemoteBackend(),
+    )
+
+    result = await session.write_memory(
+        address="0x20000000",
+        data_hex="0102",
+        expected_old_hex="0000",
+    )
+
+    assert result.bytes_written == 2
+    assert result.verified_old_value
+    assert controller.commands == [
+        "-data-read-memory-bytes 0x20000000 2",
+        "-data-write-memory-bytes 0x20000000 0102",
+    ]
+
+@pytest.mark.asyncio
+async def test_debug_session_resolves_symbol_and_disassembly_context() -> None:
+    controller = FakeController(
+        [
+            '1^done,frame={addr="0x08001234",func="main",fullname="/workspace/main.c",line="42"}',
+            (
+                '2^done,asm_insns=[{address="0x08001234",func-name="main",'
+                'offset="0",inst="udf #0"}]'
+            ),
+        ]
+    )
+    session = DebugSession(
+        controller=cast(MIController, controller),
+        backend=GenericRemoteBackend(),
+    )
+
+    context = await session.symbol_context(address="0x08001234", instruction_count=1)
+
+    assert context.symbol == "main"
+    assert context.source == "/workspace/main.c:42"
+    assert context.disassembly[0].instruction == "udf #0"
+    assert controller.commands == [
+        "-stack-info-frame",
+        "-data-disassemble -a 0x08001234 -n 1 -- 0",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_debug_session_resume_timeout_auto_interrupts() -> None:
     controller = FakeController(["1^done"], timeout_on="exec-continue")
     session = DebugSession(
@@ -147,6 +200,28 @@ async def test_debug_session_resume_timeout_auto_interrupts() -> None:
 
     assert state == TargetState.HALTED
     assert controller.commands == ["-exec-continue", "-exec-interrupt"]
+
+
+@pytest.mark.asyncio
+async def test_debug_session_resume_marks_degraded_when_interrupt_fails() -> None:
+    controller = FakeController([], timeout_on="exec-continue")
+
+    async def failing_execute(command, *, timeout_ms=3000):
+        serialized = command.serialize()
+        controller.commands.append(serialized)
+        raise MITimeoutError("timeout")
+
+    controller.execute = failing_execute  # type: ignore[method-assign]
+    session = DebugSession(
+        controller=cast(MIController, controller),
+        backend=GenericRemoteBackend(),
+    )
+    session.state_machine.transition(TargetState.CONNECTING, "test")
+    session.state_machine.transition(TargetState.HALTED, "test")
+
+    state = await session.resume(max_run_ms=1, auto_interrupt=True)
+
+    assert state == TargetState.DEGRADED
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,39 @@
+- name: needs-triage
+  color: cfd3d7
+  description: Needs maintainer review and release/area classification.
+- name: type:bug
+  color: d73a4a
+  description: Reproducible defect or regression.
+- name: type:feature
+  color: a2eeef
+  description: New user-facing capability or workflow.
+- name: type:research
+  color: d4c5f9
+  description: Investigation before implementation.
+- name: area:mcp
+  color: 1d76db
+  description: MCP protocol, tools, resources, or client compatibility.
+- name: area:backend
+  color: 0e8a16
+  description: GDB-compatible debugger backend adapters.
+- name: area:safety
+  color: b60205
+  description: Permission model, interlocks, confirmations, or auditability.
+- name: area:analyzer
+  color: fbca04
+  description: Fault, symbol, RTOS, SVD, or state analyzers.
+- name: area:docs
+  color: 0075ca
+  description: Documentation, examples, or release process.
+- name: area:tests
+  color: 5319e7
+  description: CI, fixtures, fuzzing, compatibility, or regression tests.
+- name: needs-hardware
+  color: e99695
+  description: Requires physical target, probe, or vendor debug server validation.
+- name: needs-transcript
+  color: fef2c0
+  description: Needs sanitized GDB/MI transcript evidence.
+- name: good-first-issue
+  color: 7057ff
+  description: Suitable for a first contribution with clear scope.

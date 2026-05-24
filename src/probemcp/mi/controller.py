@@ -58,19 +58,26 @@ class MIController:
     transport: MITransport
     _next_token: int = 1
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    max_queued_commands: int = 32
+    _queue_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _queued_commands: int = 0
 
     async def execute(self, command: MICommand, *, timeout_ms: int = 3000) -> MICommandResult:
         """Execute one command and return its token-matched result."""
 
-        async with self._lock:
-            token = self._allocate_token()
-            await self.transport.write_line(command.serialize(token))
-            try:
-                return await self._read_until_result(token, timeout_ms=timeout_ms)
-            except TimeoutError as exc:
-                raise MITimeoutError(
-                    f"MI command {command.name.value} timed out after {timeout_ms} ms"
-                ) from exc
+        await self._reserve_queue_slot(command)
+        try:
+            async with self._lock:
+                token = self._allocate_token()
+                await self.transport.write_line(command.serialize(token))
+                try:
+                    return await self._read_until_result(token, timeout_ms=timeout_ms)
+                except TimeoutError as exc:
+                    raise MITimeoutError(
+                        f"MI command {command.name.value} timed out after {timeout_ms} ms"
+                    ) from exc
+        finally:
+            await self._release_queue_slot()
 
     async def close(self) -> None:
         """Close the underlying transport."""
@@ -81,6 +88,19 @@ class MIController:
         token = self._next_token
         self._next_token += 1
         return token
+
+    async def _reserve_queue_slot(self, command: MICommand) -> None:
+        async with self._queue_lock:
+            if self._queued_commands >= self.max_queued_commands:
+                raise MIControllerError(
+                    f"MI command queue limit reached ({self.max_queued_commands}) "
+                    f"before {command.name.value}"
+                )
+            self._queued_commands += 1
+
+    async def _release_queue_slot(self) -> None:
+        async with self._queue_lock:
+            self._queued_commands = max(0, self._queued_commands - 1)
 
     async def _read_until_result(self, token: int, *, timeout_ms: int) -> MICommandResult:
         async_records: list[MIRecord] = []

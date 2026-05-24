@@ -30,6 +30,7 @@ class AuditEvent(SchemaModel):
     """Serializable audit event for one tool call."""
 
     audit_id: str = Field(default_factory=lambda: f"audit_{uuid4().hex}")
+    correlation_id: str = Field(default_factory=lambda: f"call_{uuid4().hex}")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     session_id: str | None = None
     tool_name: str
@@ -85,10 +86,11 @@ class SQLiteAuditWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as connection:
             connection.execute(
-                "insert into audit_events (audit_id, timestamp, session_id, tool_name, "
-                "outcome, payload_json) values (?, ?, ?, ?, ?, ?)",
+                "insert into audit_events (audit_id, correlation_id, timestamp, session_id, "
+                "tool_name, outcome, payload_json) values (?, ?, ?, ?, ?, ?, ?)",
                 (
                     event.audit_id,
+                    event.correlation_id,
                     event.timestamp.isoformat(),
                     event.session_id,
                     event.tool_name,
@@ -115,9 +117,18 @@ class SQLiteAuditWriter:
                 "create table if not exists audit_events ("
                 "id integer primary key autoincrement, "
                 "audit_id text not null unique, "
+                "correlation_id text not null, "
                 "timestamp text not null, "
                 "session_id text, "
                 "tool_name text not null, "
                 "outcome text not null, "
                 "payload_json text not null)"
             )
+            columns = {
+                row[1]
+                for row in connection.execute("pragma table_info(audit_events)").fetchall()
+            }
+            if "correlation_id" not in columns:
+                connection.execute(
+                    "alter table audit_events add column correlation_id text not null default ''"
+                )

@@ -1,7 +1,7 @@
 name: Feature request
 description: Propose a new ProbeMCP feature.
 title: "[Feature]: "
-labels: ["enhancement", "needs-triage"]
+labels: ["type:feature", "needs-triage"]
 body:
   - type: textarea
     id: problem

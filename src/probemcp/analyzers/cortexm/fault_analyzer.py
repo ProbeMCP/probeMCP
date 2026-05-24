@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from probemcp.mcp_server.schemas import FaultAnalysisData, JsonScalar, JsonValue
 from probemcp.snapshots.models import DebugSnapshot
+from probemcp.symbols import summarize_symbol_context
 from probemcp.targets import normalize_registers
 
 USAGE_FAULT_BITS = {
@@ -97,6 +98,32 @@ class CortexMFaultAnalyzer:
                 "Inspect LR and the active stack pointer.",
             ]
         )
+
+        if snapshot.symbol_context is not None:
+            context = snapshot.symbol_context
+            decoded["symbol_context"] = {
+                "address": context.address,
+                "symbol": context.symbol,
+                "source": context.source,
+                "confidence": context.confidence,
+            }
+            evidence.append(summarize_symbol_context(context))
+            if context.disassembly:
+                decoded["faulting_instruction"] = context.disassembly[0].instruction
+                evidence.append(
+                    f"Nearby instruction at {context.disassembly[0].address}: "
+                    f"{context.disassembly[0].instruction}"
+                )
+            actions = [
+                action
+                for action in actions
+                if action
+                not in {
+                    "Resolve the stacked PC to a symbol.",
+                    "Disassemble around the PC.",
+                }
+            ]
+
         if snapshot.stack_data_hex:
             stacked_frame = _decode_stacked_frame(snapshot.stack_data_hex)
             if stacked_frame:

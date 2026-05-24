@@ -81,6 +81,28 @@ async def test_controller_times_out_when_result_never_arrives() -> None:
     with pytest.raises(MITimeoutError):
         await controller.execute(exec_continue(), timeout_ms=1)
 
+@pytest.mark.asyncio
+async def test_controller_rejects_when_command_queue_limit_is_reached() -> None:
+    transport = FakeMITransport([])
+    controller = MIController(transport, max_queued_commands=1)
+    started = asyncio.Event()
+
+    async def blocking_read_line() -> str:
+        started.set()
+        await asyncio.sleep(1)
+        return "1^running"
+
+    transport.read_line = blocking_read_line  # type: ignore[method-assign]
+    first = asyncio.create_task(controller.execute(exec_continue(), timeout_ms=1000))
+    await started.wait()
+
+    with pytest.raises(MIControllerError, match="queue limit"):
+        await controller.execute(exec_continue(), timeout_ms=10)
+
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
 
 @pytest.mark.asyncio
 async def test_controller_reports_parse_errors_as_controller_errors() -> None:

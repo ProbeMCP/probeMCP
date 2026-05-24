@@ -1,7 +1,7 @@
 name: Backend adapter request
 description: Request support for a GDB-compatible debugger backend.
 title: "[Backend]: "
-labels: ["backend", "needs-triage"]
+labels: ["area:backend", "needs-triage"]
 body:
   - type: input
     id: backend

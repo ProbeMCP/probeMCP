@@ -15,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonScalar] | dict[str, JsonScalar]
 
+API_SCHEMA_VERSION = "0.1"
+
 
 class SchemaModel(BaseModel):
     """Base model for public MCP schemas."""
@@ -277,6 +279,7 @@ class WriteMemoryData(SchemaModel):
 
     address: str
     bytes_written: int = Field(ge=0)
+    verified_old_value: bool = False
 
 
 class BreakpointLocation(SchemaModel):
@@ -326,6 +329,8 @@ class DebugSnapshotRequest(SessionRequest):
     include_fault_registers: bool = True
     include_stack: bool = False
     stack_bytes: int = Field(default=128, ge=0, le=4096)
+    include_symbol_context: bool = True
+    disassembly_instructions: int = Field(default=6, ge=0, le=32)
 
 
 class DebugSnapshotData(SchemaModel):
@@ -360,6 +365,32 @@ class FaultAnalysisData(SchemaModel):
     hypotheses: list[str] = Field(default_factory=list)
     recommended_next_actions: list[str] = Field(default_factory=list)
     decoded_registers: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class PeripheralRegisterData(SchemaModel):
+    """Decoded peripheral register data."""
+
+    name: str
+    address: str
+    value: str
+    fields: dict[str, int] = Field(default_factory=dict)
+
+
+class InspectPeripheralRequest(SessionRequest):
+    """Request for inspect_peripheral."""
+
+    svd_path: str = Field(min_length=1)
+    peripheral: str = Field(min_length=1)
+    registers: list[str] | None = None
+    timeout_ms: int = Field(default=3000, ge=1, le=120_000)
+
+
+class InspectPeripheralData(SchemaModel):
+    """Decoded peripheral state."""
+
+    device: str
+    peripheral: str
+    registers: list[PeripheralRegisterData]
 
 
 class CompareSnapshotsRequest(SchemaModel):
@@ -432,3 +463,12 @@ class SuggestNextDebugStepsData(SchemaModel):
     """Ranked next-step suggestions."""
 
     actions: list[SuggestedDebugAction]
+
+
+class ServerCapabilitiesData(SchemaModel):
+    """ProbeMCP server capability metadata."""
+
+    schema_version: str = API_SCHEMA_VERSION
+    tools: list[str] = Field(default_factory=list)
+    resources: list[str] = Field(default_factory=list)
+    safety_modes: list[PermissionLevel] = Field(default_factory=list)

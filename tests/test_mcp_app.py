@@ -1,5 +1,6 @@
 import pytest
 
+from probemcp.audit.logger import JsonlAuditWriter
 from probemcp.mcp_server.app import create_app
 from probemcp.mcp_server.schemas import (
     DebugSnapshotRequest,
@@ -30,10 +31,14 @@ class FakeAppSession:
         return ReadMemoryData(address=address, length=length, width=width, data_hex="00000000")
 
 
-def make_app_service() -> ToolService:
+def make_app_service(tmp_path=None) -> ToolService:
     manager = SessionManager()
     manager.add(FakeAppSession())  # type: ignore[arg-type]
-    return ToolService(sessions=manager, policy=PolicyEngine())
+    return ToolService(
+        sessions=manager,
+        policy=PolicyEngine(),
+        audit_writer=JsonlAuditWriter(tmp_path / "audit.jsonl") if tmp_path else None,
+    )
 
 
 @pytest.mark.asyncio
@@ -44,6 +49,8 @@ async def test_create_app_registers_metadata_tool() -> None:
 
     assert any(tool.name == "list_supported_tools" for tool in tools)
     assert any(tool.name == "read_registers" for tool in tools)
+    assert any(tool.name == "write_memory" for tool in tools)
+    assert any(tool.name == "inspect_peripheral" for tool in tools)
     assert any(tool.name == "debug_snapshot" for tool in tools)
     assert all(tool.name != "execute_gdb_command" for tool in tools)
 
@@ -86,12 +93,17 @@ async def test_connect_target_tool_returns_factory_error_by_default() -> None:
 
 @pytest.mark.asyncio
 async def test_app_exposes_readonly_resources(tmp_path) -> None:
-    service = make_app_service()
+    service = make_app_service(tmp_path)
     app = create_app(service=service)
+    await service.debug_snapshot(DebugSnapshotRequest(session_id="session_01"))
 
     sessions = await app.read_resource("probemcp://sessions")
+    audit = await app.read_resource("probemcp://audit")
+    schema = await app.read_resource("probemcp://schema")
 
     assert "session_01" in str(sessions)
+    assert "debug_snapshot" in str(audit)
+    assert "json_schemas" in str(schema)
 
 
 @pytest.mark.asyncio

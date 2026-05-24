@@ -30,11 +30,17 @@ def create_tool_service_from_config(config: ProbeMCPConfig) -> ToolService:
         permission_mode=config.server.permission_mode,
         target_class=config.server.target_class,
         memory_write_enabled=config.server.memory_write_enabled,
+        hardware_operation_allowlist=frozenset(config.server.hardware_operation_allowlist),
         confirmation_store=ConfirmationTokenStore(
             ttl_seconds=config.server.confirmation_ttl_seconds
         ),
         resource_limits=ResourceLimits(
             max_sessions=config.server.max_sessions,
             max_memory_read_bytes=config.server.max_memory_read_bytes,
+            max_memory_write_bytes=config.server.max_memory_write_bytes,
+            max_snapshot_stack_bytes=config.server.max_snapshot_stack_bytes,
+            max_concurrent_tool_calls=config.server.max_concurrent_tool_calls,
+            max_session_operations=config.server.max_session_operations,
+            max_mi_command_queue=config.server.max_mi_command_queue,
         ),
     )

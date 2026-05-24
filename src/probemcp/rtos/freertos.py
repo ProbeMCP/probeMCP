@@ -49,3 +49,40 @@ def summarize_tasks(tasks: list[FreeRTOSTask]) -> dict[str, object]:
             if task.stack_high_water_mark is not None and task.stack_high_water_mark < 32
         ],
     }
+
+
+def decode_task_records(
+    records: list[dict[str, object]],
+    *,
+    current_tcb: str | None = None,
+) -> list[FreeRTOSTask]:
+    """Decode sanitized FreeRTOS task records from fixture or debugger data."""
+
+    tasks: list[FreeRTOSTask] = []
+    for record in records:
+        tcb = str(record.get("tcb", ""))
+        tasks.append(
+            FreeRTOSTask(
+                name=str(record.get("name", "<unnamed>")),
+                state=FreeRTOSTaskState(str(record.get("state", FreeRTOSTaskState.UNKNOWN))),
+                priority=_int_value(record.get("priority"), default=0),
+                stack_pointer=(
+                    str(record["stack_pointer"])
+                    if record.get("stack_pointer") is not None
+                    else None
+                ),
+                stack_high_water_mark=(
+                    _int_value(record.get("stack_high_water_mark"), default=0)
+                    if record.get("stack_high_water_mark") is not None
+                    else None
+                ),
+                current=bool(current_tcb and tcb == current_tcb),
+            )
+        )
+    return tasks
+
+
+def _int_value(value: object, *, default: int) -> int:
+    if value is None:
+        return default
+    return int(str(value), 0)
