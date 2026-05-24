@@ -151,6 +151,11 @@ Additional hardening docs:
 - [MCP client setup](docs/mcp-client-setup.md)
 - [troubleshooting](docs/troubleshooting.md)
 
+Examples:
+
+- [Codex MCP integration smoke test](examples/codex-mcp/README.md)
+- [QEMU Cortex-M HardFault demo](examples/qemu-cortexm-hardfault/README.md)
+
 ## Development
 
 ```bash

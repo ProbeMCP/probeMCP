@@ -73,6 +73,13 @@ _DEFAULT_TOOLS = (
         "Step one target instruction.",
     ),
     ToolDefinition(
+        "reset_target",
+        DebugOperation.RESET_TARGET,
+        PermissionLevel.CONFIRM_REQUIRED,
+        10_000,
+        "Reset the target through the active backend policy.",
+    ),
+    ToolDefinition(
         "read_registers",
         DebugOperation.READ_REGISTERS,
         PermissionLevel.READONLY,

@@ -1,0 +1,12 @@
+[mcp_servers.probemcp]
+type = "stdio"
+command = "/ABS/PATH/TO/uv"
+args = [
+  "--directory",
+  "/ABS/PATH/TO/probeMCP",
+  "run",
+  "probemcp",
+  "serve",
+]
+startup_timeout_sec = 15
+tool_timeout_sec = 120

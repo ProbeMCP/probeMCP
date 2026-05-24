@@ -40,6 +40,10 @@ uv run probemcp serve --config /absolute/path/probemcp.toml
 Use the same stdio command in the client MCP server configuration. Keep the
 config path absolute so the client does not depend on its current directory.
 
+For a concrete Codex configuration, real `codex exec` validation command, and
+reproducible MCP stdio smoke test, see
+[`examples/codex-mcp`](../examples/codex-mcp/README.md).
+
 ## Safety Modes
 
 - `readonly`: inspection only.
