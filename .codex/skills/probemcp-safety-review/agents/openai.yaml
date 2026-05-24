@@ -1,0 +1,4 @@
+interface:
+  display_name: "ProbeMCP Safety Review"
+  short_description: "Review ProbeMCP safety-sensitive changes"
+  default_prompt: "Use $probemcp-safety-review to review this ProbeMCP safety-sensitive change."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ProbeMCP Backend Lab"
+  short_description: "Work on GDB/MI backends and lab tests"
+  default_prompt: "Use $probemcp-backend-lab to add or validate a ProbeMCP debugger backend."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ProbeMCP Core Development"
+  short_description: "Build and verify ProbeMCP core changes"
+  default_prompt: "Use $probemcp-core-development to implement a focused ProbeMCP code change with tests."
