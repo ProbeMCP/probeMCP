@@ -1,10 +1,17 @@
 import asyncio
+import sys
 from collections import deque
 
 import pytest
 
 from probemcp.mi.commands import data_list_register_values, exec_continue
-from probemcp.mi.controller import MICommandError, MIController, MIControllerError, MITimeoutError
+from probemcp.mi.controller import (
+    MICommandError,
+    MIController,
+    MIControllerError,
+    MITimeoutError,
+    SubprocessMITransport,
+)
 from probemcp.mi.records import MIRecordKind
 
 
@@ -92,3 +99,26 @@ async def test_controller_closes_transport() -> None:
     await controller.close()
 
     assert transport.closed
+
+
+@pytest.mark.asyncio
+async def test_subprocess_transport_smoke() -> None:
+    transport = await SubprocessMITransport.spawn(
+        [
+            sys.executable,
+            "-u",
+            "-c",
+            (
+                "import sys\n"
+                "for line in sys.stdin:\n"
+                "    token=line.split('-', 1)[0]\n"
+                "    print(f'{token}^done', flush=True)\n"
+            ),
+        ]
+    )
+    controller = MIController(transport)
+
+    result = await controller.execute(data_list_register_values(), timeout_ms=1000)
+    await controller.close()
+
+    assert result.result_record.record_class == "done"

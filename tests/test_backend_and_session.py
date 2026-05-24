@@ -109,7 +109,7 @@ async def test_debug_session_reads_registers_and_memory() -> None:
     registers = await session.read_registers(RegisterGroup.CORE)
     memory = await session.read_memory(address="0x20000000", length=4)
 
-    assert registers == {"15": "0x08001234"}
+    assert registers == {"15": "0x08001234", "pc": "0x08001234"}
     assert memory.data_hex == "01020304"
 
 

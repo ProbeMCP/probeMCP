@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -69,3 +70,54 @@ class JsonlAuditWriter:
                 if stripped:
                     events.append(AuditEvent.model_validate_json(stripped))
         return events
+
+
+class SQLiteAuditWriter:
+    """Append-only SQLite audit writer."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._initialize()
+
+    def append(self, event: AuditEvent) -> None:
+        """Append one audit event as a JSON payload."""
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "insert into audit_events (audit_id, timestamp, session_id, tool_name, "
+                "outcome, payload_json) values (?, ?, ?, ?, ?, ?)",
+                (
+                    event.audit_id,
+                    event.timestamp.isoformat(),
+                    event.session_id,
+                    event.tool_name,
+                    event.outcome.value,
+                    event.model_dump_json(),
+                ),
+            )
+
+    def read_events(self) -> list[AuditEvent]:
+        """Read all events ordered by insertion."""
+
+        if not self.path.exists():
+            return []
+        with sqlite3.connect(self.path) as connection:
+            rows = connection.execute(
+                "select payload_json from audit_events order by id asc"
+            ).fetchall()
+        return [AuditEvent.model_validate_json(row[0]) for row in rows]
+
+    def _initialize(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "create table if not exists audit_events ("
+                "id integer primary key autoincrement, "
+                "audit_id text not null unique, "
+                "timestamp text not null, "
+                "session_id text, "
+                "tool_name text not null, "
+                "outcome text not null, "
+                "payload_json text not null)"
+            )

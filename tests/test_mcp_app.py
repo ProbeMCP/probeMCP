@@ -1,6 +1,39 @@
 import pytest
 
 from probemcp.mcp_server.app import create_app
+from probemcp.mcp_server.schemas import (
+    DebugSnapshotRequest,
+    ReadMemoryData,
+    RegisterGroup,
+    TargetState,
+)
+from probemcp.mcp_server.service import ToolService
+from probemcp.safety.policy import PolicyEngine
+from probemcp.sessions.manager import SessionManager
+
+
+class FakeAppSession:
+    session_id = "session_01"
+    state = TargetState.HALTED
+
+    async def read_registers(self, group: RegisterGroup = RegisterGroup.CORE) -> dict[str, str]:
+        return {"pc": "0x08001234", "sp": "0x20000000"}
+
+    async def read_memory(
+        self,
+        *,
+        address: str,
+        length: int,
+        width: int = 1,
+        timeout_ms: int = 3000,
+    ) -> ReadMemoryData:
+        return ReadMemoryData(address=address, length=length, width=width, data_hex="00000000")
+
+
+def make_app_service() -> ToolService:
+    manager = SessionManager()
+    manager.add(FakeAppSession())  # type: ignore[arg-type]
+    return ToolService(sessions=manager, policy=PolicyEngine())
 
 
 @pytest.mark.asyncio
@@ -49,3 +82,33 @@ async def test_connect_target_tool_returns_factory_error_by_default() -> None:
     )
 
     assert "SESSION_FACTORY_UNAVAILABLE" in str(result)
+
+
+@pytest.mark.asyncio
+async def test_app_exposes_readonly_resources(tmp_path) -> None:
+    service = make_app_service()
+    app = create_app(service=service)
+
+    sessions = await app.read_resource("probemcp://sessions")
+
+    assert "session_01" in str(sessions)
+
+
+@pytest.mark.asyncio
+async def test_app_registered_high_level_tools(tmp_path) -> None:
+    service = make_app_service()
+    app = create_app(service=service)
+    snapshot_result = await service.debug_snapshot(DebugSnapshotRequest(session_id="session_01"))
+    assert snapshot_result.data is not None
+
+    explain = await app.call_tool(
+        "explain_current_state",
+        {"snapshot_id": snapshot_result.data.snapshot_id},
+    )
+    suggest = await app.call_tool(
+        "suggest_next_debug_steps",
+        {"snapshot_id": snapshot_result.data.snapshot_id, "goal": "triage fault"},
+    )
+
+    assert "Target state is halted" in str(explain)
+    assert "Analyze the current fault registers" in str(suggest)

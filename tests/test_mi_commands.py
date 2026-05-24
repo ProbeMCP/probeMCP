@@ -5,6 +5,7 @@ from probemcp.mi.commands import (
     data_list_register_values,
     data_read_memory_bytes,
     exec_continue,
+    interpreter_exec_console,
     target_select,
 )
 
@@ -35,3 +36,16 @@ def test_breakpoint_command_quotes_locations_with_spaces() -> None:
 def test_continue_and_delete_commands() -> None:
     assert exec_continue().serialize(4) == "4-exec-continue"
     assert break_delete("1").serialize(5) == "5-break-delete 1"
+
+
+def test_interpreter_exec_console_is_allowlisted() -> None:
+    assert interpreter_exec_console("monitor reset halt").serialize(6) == (
+        '6-interpreter-exec console "monitor reset halt"'
+    )
+
+    try:
+        interpreter_exec_console("monitor flash erase")
+    except ValueError as exc:
+        assert "not allowlisted" in str(exc)
+    else:  # pragma: no cover - test guard
+        raise AssertionError("expected allowlist rejection")

@@ -32,6 +32,7 @@ from probemcp.mi.commands import (
 )
 from probemcp.mi.controller import MIController, MITimeoutError
 from probemcp.mi.records import MIRecord, MIValue
+from probemcp.targets import normalize_registers
 
 
 class DebugSessionError(RuntimeError):
@@ -114,6 +115,8 @@ class DebugSession:
 
         result = await self.controller.execute(data_list_register_values(), timeout_ms=3000)
         registers = _parse_register_values(result.result_record)
+        profile = self.connection.profile if self.connection is not None else "cortex-m"
+        registers = normalize_registers(registers, profile=profile)
         if group == RegisterGroup.CORE:
             return registers
         return registers
@@ -168,8 +171,14 @@ class DebugSession:
         await self.controller.execute(break_delete(breakpoint_id), timeout_ms=timeout_ms)
         return ClearBreakpointData(breakpoint_id=breakpoint_id, removed=True)
 
-    async def reset_target(self, *, mode: ResetMode) -> TargetState:
-        """Placeholder reset hook for future backend-specific implementation."""
+    async def reset_target(self, *, mode: ResetMode, timeout_ms: int = 10_000) -> TargetState:
+        """Reset the target through a backend-specific allowlisted path when available."""
+
+        resetter = getattr(self.backend, "reset_target", None)
+        if resetter is not None:
+            state = await resetter(self.controller, mode=mode, timeout_ms=timeout_ms)
+            self.state_machine.transition(state, f"backend reset {mode.value} requested")
+            return self.state
 
         if mode == ResetMode.HALT:
             self.state_machine.transition(TargetState.HALTED, "reset halt requested")

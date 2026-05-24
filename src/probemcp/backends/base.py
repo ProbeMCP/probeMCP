@@ -33,7 +33,9 @@ class BackendConnection(SchemaModel):
 class BackendAdapter(Protocol):
     """Adapter contract for GDB-compatible backends."""
 
-    kind: BackendKind
+    @property
+    def kind(self) -> BackendKind:
+        """Backend kind."""
 
     async def connect(
         self,

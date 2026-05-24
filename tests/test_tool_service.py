@@ -13,9 +13,11 @@ from probemcp.mcp_server.schemas import (
     BreakpointType,
     ClearBreakpointData,
     ClearBreakpointRequest,
+    CompareSnapshotsRequest,
     ConnectTargetRequest,
     DebugSnapshotRequest,
     DisconnectTargetRequest,
+    ExplainCurrentStateRequest,
     HaltData,
     HaltRequest,
     PermissionLevel,
@@ -29,9 +31,11 @@ from probemcp.mcp_server.schemas import (
     SetBreakpointRequest,
     StepInstructionData,
     StepInstructionRequest,
+    SuggestNextDebugStepsRequest,
     TargetState,
 )
 from probemcp.mcp_server.service import ToolService
+from probemcp.safety.limits import ResourceLimits
 from probemcp.safety.policy import DebugOperation, PolicyDecisionKind, PolicyEngine, PolicyRequest
 from probemcp.sessions.manager import SessionManager
 
@@ -79,8 +83,8 @@ class FakeToolSession:
         self.calls.append(f"step:{timeout_ms}")
         return StepInstructionData(pc="0x08001238")
 
-    async def reset_target(self, *, mode: ResetMode) -> TargetState:
-        self.calls.append(f"reset:{mode.value}")
+    async def reset_target(self, *, mode: ResetMode, timeout_ms: int = 10_000) -> TargetState:
+        self.calls.append(f"reset:{mode.value}:{timeout_ms}")
         self.state = TargetState.HALTED if mode == ResetMode.HALT else TargetState.RUNNING
         return self.state
 
@@ -137,6 +141,22 @@ def make_service(tmp_path: Path, *, permission: PermissionLevel = PermissionLeve
     return service, session
 
 
+async def confirmed(
+    service: ToolService,
+    method_name: str,
+    request: Any,
+    session: FakeToolSession | None = None,
+):
+    method = getattr(service, method_name)
+    denied = await method(request)
+    assert not denied.ok
+    assert denied.error is not None
+    assert denied.error.confirmation_token is not None
+    if session is not None:
+        session.calls.clear()
+    return await method(request, confirmation_token=denied.error.confirmation_token)
+
+
 def test_policy_accepts_confirmation_token_for_confirm_required_mode() -> None:
     decision = PolicyEngine().evaluate(
         PolicyRequest(
@@ -182,9 +202,11 @@ async def test_tool_service_allows_target_changing_action_with_confirmation(
 ) -> None:
     service, session = make_service(tmp_path, permission=PermissionLevel.CONFIRM_REQUIRED)
 
-    result = await service.halt(
+    result = await confirmed(
+        service,
+        "halt",
         HaltRequest(session_id="session_01"),
-        confirmation_token="confirmed",
+        session,
     )
 
     assert result.ok
@@ -200,16 +222,20 @@ async def test_tool_service_read_memory_and_breakpoints(tmp_path: Path) -> None:
     memory = await service.read_memory(
         ReadMemoryRequest(session_id="session_01", address="0x20000000", length=4)
     )
-    breakpoint = await service.set_breakpoint(
+    breakpoint = await confirmed(
+        service,
+        "set_breakpoint",
         SetBreakpointRequest(
             session_id="session_01",
             location=BreakpointLocation(kind="symbol", value="main"),
         ),
-        confirmation_token="confirmed",
+        session,
     )
-    cleared = await service.clear_breakpoint(
+    cleared = await confirmed(
+        service,
+        "clear_breakpoint",
         ClearBreakpointRequest(session_id="session_01", breakpoint_id="1"),
-        confirmation_token="confirmed",
+        session,
     )
 
     assert memory.ok
@@ -226,9 +252,11 @@ async def test_tool_service_read_memory_and_breakpoints(tmp_path: Path) -> None:
 async def test_tool_service_resume_uses_bounded_request(tmp_path: Path) -> None:
     service, session = make_service(tmp_path, permission=PermissionLevel.CONFIRM_REQUIRED)
 
-    result = await service.resume(
+    result = await confirmed(
+        service,
+        "resume",
         ResumeRequest(session_id="session_01", max_run_ms=50),
-        confirmation_token="confirmed",
+        session,
     )
 
     assert result.ok
@@ -240,13 +268,17 @@ async def test_tool_service_resume_uses_bounded_request(tmp_path: Path) -> None:
 async def test_tool_service_step_and_reset_use_confirmation(tmp_path: Path) -> None:
     service, session = make_service(tmp_path, permission=PermissionLevel.CONFIRM_REQUIRED)
 
-    step = await service.step_instruction(
+    step = await confirmed(
+        service,
+        "step_instruction",
         StepInstructionRequest(session_id="session_01", count=2),
-        confirmation_token="confirmed",
+        session,
     )
-    reset = await service.reset_target(
+    reset = await confirmed(
+        service,
+        "reset_target",
         ResetTargetRequest(session_id="session_01", mode=ResetMode.RUN),
-        confirmation_token="confirmed",
+        session,
     )
 
     assert step.ok
@@ -254,16 +286,18 @@ async def test_tool_service_step_and_reset_use_confirmation(tmp_path: Path) -> N
     assert step.data.pc == "0x08001238"
     assert reset.ok
     assert reset.target_state == TargetState.RUNNING
-    assert session.calls == ["step:5000", "step:5000", "reset:run"]
+    assert session.calls == ["reset:run:10000"]
 
 
 @pytest.mark.asyncio
 async def test_tool_service_disconnect_removes_session(tmp_path: Path) -> None:
     service, session = make_service(tmp_path, permission=PermissionLevel.CONFIRM_REQUIRED)
 
-    result = await service.disconnect_target(
+    result = await confirmed(
+        service,
+        "disconnect_target",
         DisconnectTargetRequest(session_id="session_01"),
-        confirmation_token="confirmed",
+        session,
     )
 
     assert result.ok
@@ -308,18 +342,55 @@ async def test_tool_service_connect_registers_created_session(tmp_path: Path) ->
         session_factory=factory,
     )
 
-    result = await service.connect_target(
+    result = await confirmed(
+        service,
+        "connect_target",
         ConnectTargetRequest(
             backend=BackendKind.GENERIC_REMOTE,
             endpoint="localhost:3333",
         ),
-        confirmation_token="confirmed",
     )
 
     assert result.ok
     assert result.data is not None
     assert result.data.session_id == "session_01"
     assert service.sessions.get("session_01") is created
+
+
+@pytest.mark.asyncio
+async def test_tool_service_rejects_invalid_confirmation_token(tmp_path: Path) -> None:
+    service, session = make_service(tmp_path, permission=PermissionLevel.CONFIRM_REQUIRED)
+
+    result = await service.halt(
+        HaltRequest(session_id="session_01"),
+        confirmation_token="not-issued",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.code == "INVALID_CONFIRMATION_TOKEN"
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_tool_service_enforces_resource_limits(tmp_path: Path) -> None:
+    service, _session = make_service(tmp_path)
+    service.resource_limits = ResourceLimits(max_sessions=1, max_memory_read_bytes=2)
+
+    memory = await service.read_memory(
+        ReadMemoryRequest(session_id="session_01", address="0x20000000", length=4)
+    )
+    connect = await service.connect_target(
+        ConnectTargetRequest(
+            backend=BackendKind.GENERIC_REMOTE,
+            endpoint="localhost:3333",
+        )
+    )
+
+    assert memory.error is not None
+    assert memory.error.code == "RESOURCE_LIMIT_EXCEEDED"
+    assert connect.error is not None
+    assert connect.error.code == "RESOURCE_LIMIT_EXCEEDED"
 
 
 @pytest.mark.asyncio
@@ -340,6 +411,37 @@ async def test_tool_service_snapshot_and_fault_analysis(tmp_path: Path) -> None:
     assert analysis.ok
     assert analysis.data is not None
     assert analysis.data.fault_type == "UsageFault: INVSTATE"
+
+
+@pytest.mark.asyncio
+async def test_tool_service_compare_explain_and_suggest(tmp_path: Path) -> None:
+    service, _session = make_service(tmp_path)
+
+    first = await service.debug_snapshot(DebugSnapshotRequest(session_id="session_01"))
+    second = await service.debug_snapshot(DebugSnapshotRequest(session_id="session_01"))
+    assert first.data is not None
+    assert second.data is not None
+
+    compare = await service.compare_snapshots(
+        CompareSnapshotsRequest(
+            before_snapshot_id=first.data.snapshot_id,
+            after_snapshot_id=second.data.snapshot_id,
+        )
+    )
+    explain = await service.explain_current_state(
+        ExplainCurrentStateRequest(snapshot_id=first.data.snapshot_id)
+    )
+    suggest = await service.suggest_next_debug_steps(
+        SuggestNextDebugStepsRequest(snapshot_id=first.data.snapshot_id, goal="triage")
+    )
+
+    assert compare.ok
+    assert compare.data is not None
+    assert "No register" in compare.data.summary
+    assert explain.ok
+    assert suggest.ok
+    assert suggest.data is not None
+    assert suggest.data.actions[0].tool_name == "analyze_fault"
 
 
 @pytest.mark.asyncio

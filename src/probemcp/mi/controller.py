@@ -117,7 +117,7 @@ class MIController:
                 return result
 
 
-class SubprocessMITransport:  # pragma: no cover
+class SubprocessMITransport:
     """Async subprocess-backed GDB/MI transport."""
 
     def __init__(self, process: asyncio.subprocess.Process) -> None:
@@ -128,12 +128,12 @@ class SubprocessMITransport:  # pragma: no cover
         self._stdout = process.stdout
 
     @classmethod
-    async def spawn_gdb(cls, gdb_path: str, elf_path: str | None = None) -> SubprocessMITransport:
-        """Spawn GDB in MI mode without loading user init files."""
+    async def spawn(
+        cls,
+        args: list[str],
+    ) -> SubprocessMITransport:
+        """Spawn a subprocess exposing a GDB/MI-like stdin/stdout transport."""
 
-        args = [gdb_path, "--interpreter=mi2", "--nx", "--nh", "-q"]
-        if elf_path is not None:
-            args.append(elf_path)
         process = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.PIPE,
@@ -141,6 +141,15 @@ class SubprocessMITransport:  # pragma: no cover
             stderr=asyncio.subprocess.STDOUT,
         )
         return cls(process)
+
+    @classmethod
+    async def spawn_gdb(cls, gdb_path: str, elf_path: str | None = None) -> SubprocessMITransport:
+        """Spawn GDB in MI mode without loading user init files."""
+
+        args = [gdb_path, "--interpreter=mi2", "--nx", "--nh", "-q"]
+        if elf_path is not None:
+            args.append(elf_path)
+        return await cls.spawn(args)
 
     async def write_line(self, line: str) -> None:
         self._stdin.write(f"{line}\n".encode())

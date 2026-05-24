@@ -6,6 +6,7 @@ from typing import Protocol
 
 from probemcp.mcp_server.schemas import DebugSnapshotRequest, ReadMemoryData, RegisterGroup
 from probemcp.snapshots.models import DebugSnapshot
+from probemcp.targets import normalize_registers
 
 FAULT_REGISTER_ADDRESSES = {
     "cfsr": "0xE000ED28",
@@ -55,7 +56,7 @@ class SnapshotService:
         stack_data_hex: str | None = None
 
         if request.include_core_registers:
-            core_registers = await target.read_registers(RegisterGroup.CORE)
+            core_registers = normalize_registers(await target.read_registers(RegisterGroup.CORE))
 
         if request.include_fault_registers:
             fault_registers = await self._read_fault_registers(target)

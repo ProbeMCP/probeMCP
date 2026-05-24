@@ -10,11 +10,13 @@ from pydantic import BaseModel
 
 from probemcp.analyzers.cortexm import CortexMFaultAnalyzer
 from probemcp.audit.logger import AuditEvent, AuditOutcome, JsonlAuditWriter
+from probemcp.errors import ErrorCode, make_error
 from probemcp.mcp_server.schemas import (
     AnalyzeFaultRequest,
     BreakpointData,
     ClearBreakpointData,
     ClearBreakpointRequest,
+    CompareSnapshotsRequest,
     ConnectTargetData,
     ConnectTargetRequest,
     DebugError,
@@ -22,6 +24,8 @@ from probemcp.mcp_server.schemas import (
     DebugSnapshotRequest,
     DisconnectTargetRequest,
     ErrorCategory,
+    ExplainCurrentStateData,
+    ExplainCurrentStateRequest,
     HaltData,
     HaltRequest,
     PermissionLevel,
@@ -34,14 +38,22 @@ from probemcp.mcp_server.schemas import (
     ResumeData,
     ResumeRequest,
     SetBreakpointRequest,
+    SnapshotDiffData,
     StepInstructionData,
     StepInstructionRequest,
+    SuggestedDebugAction,
+    SuggestNextDebugStepsData,
+    SuggestNextDebugStepsRequest,
     TargetState,
     ToolResult,
 )
+from probemcp.privacy import redact_mapping
+from probemcp.safety.confirmation import ConfirmationError, ConfirmationTokenStore
+from probemcp.safety.limits import ResourceLimits
 from probemcp.safety.policy import (
     DebugOperation,
     PolicyDecision,
+    PolicyDecisionKind,
     PolicyEngine,
     PolicyRequest,
     TargetClass,
@@ -65,6 +77,9 @@ class ToolService:
     session_factory: SessionFactory | None = None
     permission_mode: PermissionLevel = PermissionLevel.READONLY
     target_class: TargetClass = TargetClass.UNKNOWN
+    memory_write_enabled: bool = False
+    confirmation_store: ConfirmationTokenStore | None = None
+    resource_limits: ResourceLimits = ResourceLimits()
     _snapshots: dict[str, DebugSnapshot] | None = None
 
     def __post_init__(self) -> None:
@@ -72,6 +87,8 @@ class ToolService:
             self.snapshot_service = SnapshotService()
         if self.fault_analyzer is None:
             self.fault_analyzer = CortexMFaultAnalyzer()
+        if self.confirmation_store is None:
+            self.confirmation_store = ConfirmationTokenStore()
         if self._snapshots is None:
             self._snapshots = {}
 
@@ -83,19 +100,28 @@ class ToolService:
     ) -> ToolResult[ConnectTargetData]:
         """Create and connect a debug session."""
 
+        limit_error = self.resource_limits.check_session_count(len(self.sessions.list_ids()))
+        if limit_error is not None:
+            return self._failure(
+                operation=DebugOperation.CONNECT_TARGET,
+                tool_name="connect_target",
+                error=limit_error,
+                request=request,
+            )
+
         if self.session_factory is None:
             return self._failure(
                 operation=DebugOperation.CONNECT_TARGET,
                 tool_name="connect_target",
                 error=DebugError(
-                    code="SESSION_FACTORY_UNAVAILABLE",
+                    code=ErrorCode.SESSION_FACTORY_UNAVAILABLE.value,
                     message="connect_target requires a configured session factory.",
                     category=ErrorCategory.INTERNAL,
                 ),
                 request=request,
             )
 
-        decision = self._evaluate(DebugOperation.CONNECT_TARGET, confirmation_token)
+        decision = self._evaluate(DebugOperation.CONNECT_TARGET, request, confirmation_token)
         if not decision.allowed:
             return self._policy_failure(
                 "connect_target",
@@ -217,7 +243,7 @@ class ToolService:
         """Reset target through session/backend policy."""
 
         async def run(session: Any) -> ResetTargetData:
-            state = await session.reset_target(mode=request.mode)
+            state = await session.reset_target(mode=request.mode, timeout_ms=request.timeout_ms)
             return ResetTargetData(mode=request.mode, state=state)
 
         return await self._with_session(
@@ -249,6 +275,16 @@ class ToolService:
         request: ReadMemoryRequest,
     ) -> ToolResult[ReadMemoryData]:
         """Read memory."""
+
+        limit_error = self.resource_limits.check_memory_read(request.length)
+        if limit_error is not None:
+            return self._failure(
+                operation=DebugOperation.READ_MEMORY,
+                tool_name="read_memory",
+                error=limit_error,
+                request=request,
+                session_id=request.session_id,
+            )
 
         async def run(session: Any) -> ReadMemoryData:
             return cast(
@@ -351,7 +387,7 @@ class ToolService:
                 operation=DebugOperation.ANALYZE_FAULT,
                 tool_name="analyze_fault",
                 error=DebugError(
-                    code="SNAPSHOT_REQUIRED",
+                    code=ErrorCode.SNAPSHOT_REQUIRED.value,
                     message="analyze_fault currently requires snapshot_id.",
                     category=ErrorCategory.VALIDATION,
                 ),
@@ -364,7 +400,7 @@ class ToolService:
                 operation=DebugOperation.ANALYZE_FAULT,
                 tool_name="analyze_fault",
                 error=DebugError(
-                    code="SNAPSHOT_NOT_FOUND",
+                    code=ErrorCode.SNAPSHOT_NOT_FOUND.value,
                     message=f"Snapshot not found: {request.snapshot_id}",
                     category=ErrorCategory.VALIDATION,
                 ),
@@ -381,6 +417,159 @@ class ToolService:
             target_state=snapshot.state,
         )
 
+    async def compare_snapshots(
+        self, request: CompareSnapshotsRequest
+    ) -> ToolResult[SnapshotDiffData]:
+        """Compare two captured debug snapshots."""
+
+        before = self.get_snapshot(request.before_snapshot_id)
+        after = self.get_snapshot(request.after_snapshot_id)
+        if before is None or after is None:
+            return self._failure(
+                operation=DebugOperation.COMPARE_SNAPSHOTS,
+                tool_name="compare_snapshots",
+                error=make_error(
+                    ErrorCode.SNAPSHOT_NOT_FOUND,
+                    "one or both snapshots were not found",
+                    ErrorCategory.VALIDATION,
+                    details={
+                        "before_snapshot_id": request.before_snapshot_id,
+                        "after_snapshot_id": request.after_snapshot_id,
+                    },
+                ),
+                request=request,
+            )
+
+        register_diffs = _diff_dicts(
+            {**before.core_registers, **before.fault_registers},
+            {**after.core_registers, **after.fault_registers},
+        )
+        summary = (
+            "No register or fault-register differences detected."
+            if not register_diffs
+            else f"{len(register_diffs)} register or fault-register differences detected."
+        )
+        return self._success(
+            "compare_snapshots",
+            DebugOperation.COMPARE_SNAPSHOTS,
+            request,
+            SnapshotDiffData(register_diffs=register_diffs, summary=summary),
+            session_id=after.session_id,
+            target_state=after.state,
+        )
+
+    async def explain_current_state(
+        self,
+        request: ExplainCurrentStateRequest,
+    ) -> ToolResult[ExplainCurrentStateData]:
+        """Explain a captured snapshot in structured terms."""
+
+        snapshot = self._snapshot_from_request(request.snapshot_id, request.session_id)
+        if snapshot is None:
+            return self._failure(
+                operation=DebugOperation.EXPLAIN_CURRENT_STATE,
+                tool_name="explain_current_state",
+                error=make_error(
+                    ErrorCode.SNAPSHOT_NOT_FOUND,
+                    "explain_current_state currently requires an existing snapshot_id",
+                    ErrorCategory.VALIDATION,
+                ),
+                request=request,
+            )
+
+        evidence = [snapshot.summary]
+        pc = snapshot.core_registers.get("pc") or snapshot.core_registers.get("15")
+        cfsr = snapshot.fault_registers.get("cfsr")
+        if pc is not None:
+            evidence.append(f"PC={pc}")
+        if cfsr is not None:
+            evidence.append(f"CFSR={cfsr}")
+        data = ExplainCurrentStateData(
+            summary=f"Target state is {snapshot.state.value}.",
+            evidence=evidence,
+        )
+        return self._success(
+            "explain_current_state",
+            DebugOperation.EXPLAIN_CURRENT_STATE,
+            request,
+            data,
+            session_id=snapshot.session_id,
+            target_state=snapshot.state,
+        )
+
+    async def suggest_next_debug_steps(
+        self,
+        request: SuggestNextDebugStepsRequest,
+    ) -> ToolResult[SuggestNextDebugStepsData]:
+        """Suggest conservative next debugging steps."""
+
+        snapshot = self._snapshot_from_request(request.snapshot_id, request.session_id)
+        if snapshot is None:
+            return self._failure(
+                operation=DebugOperation.SUGGEST_NEXT_DEBUG_STEPS,
+                tool_name="suggest_next_debug_steps",
+                error=make_error(
+                    ErrorCode.SNAPSHOT_NOT_FOUND,
+                    "suggest_next_debug_steps currently requires an existing snapshot_id",
+                    ErrorCategory.VALIDATION,
+                ),
+                request=request,
+            )
+
+        actions = [
+            SuggestedDebugAction(
+                title="Analyze the current fault registers",
+                rationale="The action is read-only and links next steps to captured evidence.",
+                tool_name="analyze_fault",
+                risk="low",
+                required_permission=PermissionLevel.READONLY,
+            ),
+            SuggestedDebugAction(
+                title="Capture a second snapshot after one instruction step",
+                rationale=(
+                    "A bounded step plus snapshot can reveal whether state changes are stable."
+                ),
+                tool_name="step_instruction",
+                risk="medium",
+                required_permission=PermissionLevel.CONFIRM_REQUIRED,
+            ),
+        ]
+        return self._success(
+            "suggest_next_debug_steps",
+            DebugOperation.SUGGEST_NEXT_DEBUG_STEPS,
+            request,
+            SuggestNextDebugStepsData(actions=actions),
+            session_id=snapshot.session_id,
+            target_state=snapshot.state,
+        )
+
+    def list_session_summaries(self) -> list[dict[str, str]]:
+        """Return read-only summaries for active sessions."""
+
+        summaries: list[dict[str, str]] = []
+        for session_id in self.sessions.list_ids():
+            try:
+                session = self.sessions.get(session_id)
+            except SessionNotFoundError:  # pragma: no cover - defensive race guard
+                continue
+            summaries.append({"session_id": session_id, "state": session.state.value})
+        return summaries
+
+    def get_snapshot(self, snapshot_id: str) -> DebugSnapshot | None:
+        """Return a captured snapshot by ID."""
+
+        assert self._snapshots is not None
+        return self._snapshots.get(snapshot_id)
+
+    def _snapshot_from_request(
+        self,
+        snapshot_id: str | None,
+        _session_id: str | None,
+    ) -> DebugSnapshot | None:
+        if snapshot_id is None:
+            return None
+        return self.get_snapshot(snapshot_id)
+
     async def _disconnect(self, session: Any, request: DisconnectTargetRequest) -> None:
         await session.disconnect(timeout_ms=request.timeout_ms)
         self.sessions.remove(request.session_id)
@@ -394,7 +583,7 @@ class ToolService:
         *,
         confirmation_token: str | None = None,
     ) -> ToolResult[Any]:
-        decision = self._evaluate(operation, confirmation_token)
+        decision = self._evaluate(operation, request, confirmation_token)
         if not decision.allowed:
             return self._policy_failure(tool_name, operation, decision.to_error(), request)
 
@@ -406,7 +595,7 @@ class ToolService:
                 operation=operation,
                 tool_name=tool_name,
                 error=DebugError(
-                    code="SESSION_NOT_FOUND",
+                    code=ErrorCode.SESSION_NOT_FOUND.value,
                     message=f"Session not found: {getattr(request, 'session_id', None)}",
                     category=ErrorCategory.VALIDATION,
                 ),
@@ -438,14 +627,30 @@ class ToolService:
     def _evaluate(
         self,
         operation: DebugOperation,
+        request: BaseModel,
         confirmation_token: str | None,
     ) -> PolicyDecision:
+        validated_token: str | None = None
+        if confirmation_token is not None:
+            assert self.confirmation_store is not None
+            try:
+                self.confirmation_store.verify(confirmation_token, operation, request)
+            except ConfirmationError as exc:
+                return PolicyDecision(
+                    kind=PolicyDecisionKind.DENY,
+                    operation=operation,
+                    required_permission=PermissionLevel.CONFIRM_REQUIRED,
+                    reason=str(exc),
+                )
+            validated_token = confirmation_token
+
         return self.policy.evaluate(
             PolicyRequest(
                 permission_mode=self.permission_mode,
                 operation=operation,
                 target_class=self.target_class,
-                confirmation_token=confirmation_token,
+                memory_write_enabled=self.memory_write_enabled,
+                confirmation_token=validated_token,
             )
         )
 
@@ -457,6 +662,23 @@ class ToolService:
         request: BaseModel,
     ) -> ToolResult[Any]:
         assert error is not None
+        if error.code == ErrorCode.CONFIRMATION_REQUIRED.value:
+            assert self.confirmation_store is not None
+            error = error.model_copy(
+                update={
+                    "confirmation_token": self.confirmation_store.issue(operation, request),
+                }
+            )
+        elif error.code == ErrorCode.PERMISSION_DENIED.value and error.message.startswith(
+            "confirmation token"
+        ):
+            error = make_error(
+                ErrorCode.INVALID_CONFIRMATION_TOKEN,
+                error.message,
+                ErrorCategory.PERMISSION,
+                retryable=False,
+                required_permission=PermissionLevel.CONFIRM_REQUIRED,
+            )
         return self._failure(
             operation=operation,
             tool_name=tool_name,
@@ -525,7 +747,7 @@ class ToolService:
             operation=operation,
             tool_name=tool_name,
             error=DebugError(
-                code="TOOL_EXECUTION_FAILED",
+                code=ErrorCode.TOOL_EXECUTION_FAILED.value,
                 message=str(exc),
                 category=ErrorCategory.INTERNAL,
             ),
@@ -566,9 +788,21 @@ class ToolService:
 
 def _summary(value: Any) -> dict[str, Any]:
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json", exclude_none=True)
+        return redact_mapping(value.model_dump(mode="json", exclude_none=True))
     if isinstance(value, dict):
-        return value
+        return redact_mapping(value)
     if value is None:
         return {}
     return {"value": str(value)}
+
+
+def _diff_dicts(
+    before: dict[str, str],
+    after: dict[str, str],
+) -> dict[str, tuple[str | None, str | None]]:
+    keys = sorted(set(before) | set(after))
+    return {
+        key: (before.get(key), after.get(key))
+        for key in keys
+        if before.get(key) != after.get(key)
+    }

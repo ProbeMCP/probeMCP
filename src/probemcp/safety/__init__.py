@@ -1,5 +1,7 @@
 """Safety policy primitives for ProbeMCP."""
 
+from probemcp.safety.confirmation import ConfirmationError, ConfirmationTokenStore
+from probemcp.safety.limits import ResourceLimits
 from probemcp.safety.policy import (
     DebugOperation,
     OperationRisk,
@@ -12,10 +14,13 @@ from probemcp.safety.policy import (
 
 __all__ = [
     "DebugOperation",
+    "ConfirmationError",
+    "ConfirmationTokenStore",
     "OperationRisk",
     "PolicyDecision",
     "PolicyDecisionKind",
     "PolicyEngine",
     "PolicyRequest",
+    "ResourceLimits",
     "TargetClass",
 ]

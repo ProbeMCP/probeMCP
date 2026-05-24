@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -12,9 +13,12 @@ from probemcp.mcp_server.schemas import (
     BreakpointLocation,
     BreakpointType,
     ClearBreakpointRequest,
+    CompareSnapshotsRequest,
     ConnectTargetRequest,
     DebugSnapshotRequest,
+    DetailLevel,
     DisconnectTargetRequest,
+    ExplainCurrentStateRequest,
     HaltPolicy,
     HaltRequest,
     ReadMemoryRequest,
@@ -25,6 +29,7 @@ from probemcp.mcp_server.schemas import (
     ResumeRequest,
     SetBreakpointRequest,
     StepInstructionRequest,
+    SuggestNextDebugStepsRequest,
 )
 from probemcp.mcp_server.service import ToolService
 from probemcp.mcp_server.tools import ToolRegistry
@@ -62,6 +67,31 @@ def create_app(
             }
             for tool in tool_registry.list()
         ]
+
+    @app.resource(
+        "probemcp://sessions",
+        name="sessions",
+        description="Active ProbeMCP debug sessions.",
+        mime_type="application/json",
+    )
+    def sessions_resource() -> str:
+        """Expose active session summaries as a read-only MCP resource."""
+
+        return json.dumps({"sessions": tool_service.list_session_summaries()})
+
+    @app.resource(
+        "probemcp://snapshots/{snapshot_id}",
+        name="snapshot",
+        description="Captured ProbeMCP debug snapshot.",
+        mime_type="application/json",
+    )
+    def snapshot_resource(snapshot_id: str) -> str:
+        """Expose captured snapshots as read-only MCP resources."""
+
+        snapshot = tool_service.get_snapshot(snapshot_id)
+        if snapshot is None:
+            return json.dumps({"error": "SNAPSHOT_NOT_FOUND", "snapshot_id": snapshot_id})
+        return snapshot.model_dump_json()
 
     @app.tool()
     async def connect_target(
@@ -289,6 +319,57 @@ def create_app(
 
         result = await tool_service.analyze_fault(
             AnalyzeFaultRequest(session_id=session_id, snapshot_id=snapshot_id)
+        )
+        return result.model_dump(mode="json")
+
+    @app.tool()
+    async def compare_snapshots(
+        before_snapshot_id: str,
+        after_snapshot_id: str,
+        include_memory_diffs: bool = False,
+    ) -> dict[str, object]:
+        """Compare two captured snapshots."""
+
+        result = await tool_service.compare_snapshots(
+            CompareSnapshotsRequest(
+                before_snapshot_id=before_snapshot_id,
+                after_snapshot_id=after_snapshot_id,
+                include_memory_diffs=include_memory_diffs,
+            )
+        )
+        return result.model_dump(mode="json")
+
+    @app.tool()
+    async def explain_current_state(
+        session_id: str | None = None,
+        snapshot_id: str | None = None,
+        detail_level: Literal["brief", "normal", "verbose"] = "normal",
+    ) -> dict[str, object]:
+        """Explain target state from a snapshot."""
+
+        result = await tool_service.explain_current_state(
+            ExplainCurrentStateRequest(
+                session_id=session_id,
+                snapshot_id=snapshot_id,
+                detail_level=DetailLevel(detail_level),
+            )
+        )
+        return result.model_dump(mode="json")
+
+    @app.tool()
+    async def suggest_next_debug_steps(
+        goal: str,
+        session_id: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> dict[str, object]:
+        """Suggest conservative next debugging steps."""
+
+        result = await tool_service.suggest_next_debug_steps(
+            SuggestNextDebugStepsRequest(
+                session_id=session_id,
+                snapshot_id=snapshot_id,
+                goal=goal,
+            )
         )
         return result.model_dump(mode="json")
 

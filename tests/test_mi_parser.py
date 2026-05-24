@@ -56,6 +56,36 @@ def test_parse_stream_record_with_escaped_text() -> None:
     assert record.text == "hello\n"
 
 
+@pytest.mark.parametrize(
+    ("line", "kind"),
+    [
+        ('@"target output"', MIRecordKind.TARGET_STREAM),
+        ('&"log output"', MIRecordKind.LOG_STREAM),
+        ('+download,section=".text",size="12"', MIRecordKind.STATUS_ASYNC),
+        ('=thread-created,id="1",group-id="i1"', MIRecordKind.NOTIFY_ASYNC),
+    ],
+)
+def test_parse_additional_mi_record_kinds(line: str, kind: MIRecordKind) -> None:
+    record = parse_mi_record(line)
+
+    assert record.kind == kind
+
+
+def test_parse_empty_tuple_and_result_list_entries() -> None:
+    record = parse_mi_record('4^done,empty={},values=[name="r0",value="0x1"],bare=abc')
+
+    assert isinstance(record, MIRecord)
+    assert record.results["empty"] == {}
+    assert record.results["values"] == [{"name": "r0"}, {"value": "0x1"}]
+    assert record.results["bare"] == "abc"
+
+
+@pytest.mark.parametrize("line", ["", "^", '~"unterminated', "1^done,foo=", "1^done,foo=[]x"])
+def test_malformed_mi_input_fails_without_hanging(line: str) -> None:
+    with pytest.raises(MIParseError):
+        parse_mi_record(line)
+
+
 def test_parse_prompt_record() -> None:
     record = parse_mi_record("(gdb)")
 

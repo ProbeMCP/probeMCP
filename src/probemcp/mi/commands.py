@@ -20,6 +20,14 @@ class MICommandName(StrEnum):
     EXEC_STEP_INSTRUCTION = "exec-step-instruction"
     BREAK_INSERT = "break-insert"
     BREAK_DELETE = "break-delete"
+    INTERPRETER_EXEC = "interpreter-exec"
+
+ALLOWLISTED_CONSOLE_COMMANDS = frozenset(
+    {
+        "monitor reset halt",
+        "monitor reset run",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +109,13 @@ def break_delete(breakpoint_id: str) -> MICommand:
     """Build a breakpoint deletion command."""
 
     return MICommand(MICommandName.BREAK_DELETE, (breakpoint_id,))
+
+def interpreter_exec_console(command: str) -> MICommand:
+    """Build an allowlisted interpreter-exec console command."""
+
+    if command not in ALLOWLISTED_CONSOLE_COMMANDS:
+        raise ValueError(f"console command is not allowlisted: {command}")
+    return MICommand(MICommandName.INTERPRETER_EXEC, ("console", command))
 
 
 def _quote_arg(arg: str) -> str:

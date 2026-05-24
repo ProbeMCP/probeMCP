@@ -114,4 +114,25 @@ _DEFAULT_TOOLS = (
         5000,
         "Analyze Cortex-M fault state.",
     ),
+    ToolDefinition(
+        "compare_snapshots",
+        DebugOperation.COMPARE_SNAPSHOTS,
+        PermissionLevel.READONLY,
+        5000,
+        "Compare two captured debug snapshots.",
+    ),
+    ToolDefinition(
+        "explain_current_state",
+        DebugOperation.EXPLAIN_CURRENT_STATE,
+        PermissionLevel.READONLY,
+        5000,
+        "Explain current target state from a snapshot.",
+    ),
+    ToolDefinition(
+        "suggest_next_debug_steps",
+        DebugOperation.SUGGEST_NEXT_DEBUG_STEPS,
+        PermissionLevel.READONLY,
+        5000,
+        "Suggest conservative next debugging steps.",
+    ),
 )

@@ -65,9 +65,9 @@ Out of scope for v0.1:
 - Arbitrary GDB command execution
 - Arbitrary shell execution
 - SaaS features
-- Multi-board orchestration
-- Full SVD decoding
-- RTOS awareness
+- Production multi-board orchestration
+- Complete SVD/peripheral heuristic coverage
+- Full RTOS memory-structure decoding
 
 ## Architecture
 
@@ -141,13 +141,23 @@ pass through policy checks and audit logging before execution.
 
 See [docs/safety-model.md](docs/safety-model.md).
 
+Additional hardening docs:
+
+- [security threat model](docs/security-threat-model.md)
+- [privacy and redaction](docs/privacy-redaction.md)
+- [compatibility matrix](docs/compatibility-matrix.md)
+- [troubleshooting](docs/troubleshooting.md)
+
 ## Development
 
 ```bash
 uv sync --extra dev
+uv run probemcp doctor
 uv run pytest
 uv run ruff check .
+uv run ruff check . --select S --ignore S101,S105,S106
 uv run mypy src
+uv build
 ```
 
 See [docs/development.md](docs/development.md) for the local development
@@ -171,9 +181,11 @@ Recommended initial stack:
 
 ## Repository Status
 
-This repository is in the planning and architecture phase. The first code
-milestone is a QEMU Cortex-M HardFault demo that can be debugged through an
-MCP client using safe structured tools.
+This repository now has the core Python scaffolding for safe MCP tools,
+GDB/MI orchestration, backend adapters, config, confirmation tokens, audit
+logging, Cortex-M analysis, SVD/RTOS/lab primitives, and CI quality gates. The
+next public milestone is a live QEMU Cortex-M HardFault demo through an MCP
+client using safe structured tools.
 
 ## License
 

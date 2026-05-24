@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from probemcp.audit.logger import AuditEvent, AuditOutcome, JsonlAuditWriter
+from probemcp.audit.logger import AuditEvent, AuditOutcome, JsonlAuditWriter, SQLiteAuditWriter
 from probemcp.mcp_server.schemas import DebugError, ErrorCategory, PermissionLevel, TargetState
 
 
@@ -46,3 +46,17 @@ def test_jsonl_audit_writer_preserves_structured_errors(tmp_path: Path) -> None:
     [event] = writer.read_events()
     assert event.error == error
     assert event.outcome == AuditOutcome.ERROR
+
+
+def test_sqlite_audit_writer_appends_and_reads_events(tmp_path: Path) -> None:
+    writer = SQLiteAuditWriter(tmp_path / "audit.sqlite3")
+    event = AuditEvent(
+        session_id="session_01",
+        tool_name="read_registers",
+        permission_mode=PermissionLevel.READONLY,
+        outcome=AuditOutcome.SUCCESS,
+    )
+
+    writer.append(event)
+
+    assert writer.read_events() == [event]
